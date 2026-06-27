@@ -689,6 +689,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   <section class="card">
     <div class="card-head"><span class="step-no">1</span><h2>Rolle wählen</h2></div>
     <div class="rolls" id="rolls"></div>
+    <div class="buffer-note" style="padding-bottom:0;margin-top:10px;">Mehrere Breiten anklickbar – der Optimierer wählt automatisch die beste Kombination (bei Bedarf auch gemischt), um den Verschnitt zu minimieren.</div>
     <div class="field buffer-row">
       <div class="field">
         <label class="flbl" for="buffer">Puffer zwischen Schnitten (mm)</label>
@@ -960,11 +961,118 @@ function bestPack(rects, W, buffer, Lmax){
   return best;
 }
 
+// Mehrere Breiten: pro Rolle die beste Breite wählen (auch gemischt),
+// gewertet nach Materialfläche (Breite × Länge).
+function packMulti(rects, widths, Lmax, buffer){
+  const ws = [...new Set(widths)].sort((a,b)=>a-b);
+  const areaOf = rolls => rolls.reduce((s,r)=> s + r.W*r.usedLength, 0);
+  const fitsW = (r,W) => Math.min(r.l,r.w) <= W+1e-6;
+
+  // Packt eine Teilmenge auf Breite W -> Rollen + Fläche.
+  function packOn(rs, W){
+    const r = bestPack(rs, W, buffer, Lmax);
+    const rolls = r.rolls.map(x => ({ W, placed:x.placed, usedLength:x.usedLength }));
+    return { rolls, area: rolls.reduce((s,rr)=>s + rr.W*rr.usedLength, 0) };
+  }
+
+  const candidates = [];
+
+  // --- Strategie A: jede Breite allein (sofern alle Teile passen) ---
+  for (const W of ws){
+    if (rects.every(r => fitsW(r,W))) candidates.push(packOn(rects, W).rolls);
+  }
+
+  // --- Strategie B: Greedy, Rolle für Rolle (für große, mehrrollige Aufträge) ---
+  (function(){
+    let remaining = rects.slice(); const rolls = []; let guard = 0;
+    while (remaining.length && guard++ < 1000){
+      let best = null;
+      for (const W of ws){
+        const fit = remaining.filter(r => fitsW(r,W));
+        if (!fit.length) continue;
+        const res = bestPack(fit, W, buffer, Lmax);
+        const fr = res.rolls[0]; if (!fr) continue;
+        const areaPlaced = fr.placed.reduce((s,p)=>s + p.pw*p.ph, 0);
+        const util = areaPlaced / (W * fr.usedLength);
+        if (!best || util > best.util + 1e-9 ||
+           (Math.abs(util-best.util) < 1e-9 && areaPlaced > best.areaPlaced))
+          best = { W, placed: fr.placed, usedLength: fr.usedLength, util, areaPlaced };
+      }
+      if (!best) break;
+      rolls.push({ W: best.W, placed: best.placed, usedLength: best.usedLength });
+      const used = new Set(best.placed.map(p=>p.key));
+      remaining = remaining.filter(r => !used.has(r.key));
+    }
+    candidates.push(rolls);
+  })();
+
+  // --- Strategie C: Teile-Typen je beste Breite zuordnen, dann lokal verbessern ---
+  (function(){
+    const groups = new Map();                       // typeIdx -> rects
+    for (const r of rects){ const k = r.typeIdx; if (!groups.has(k)) groups.set(k,[]); groups.get(k).push(r); }
+    const typeKeys = [...groups.keys()];
+    const feasible = new Map();                      // typeIdx -> mögliche Breiten
+    for (const k of typeKeys){
+      const rs = groups.get(k);
+      feasible.set(k, ws.filter(W => rs.every(r => fitsW(r,W))));
+    }
+    const soloCache = new Map();
+    const soloArea = (k,W) => {
+      const key = k+"@"+W;
+      if (!soloCache.has(key)) soloCache.set(key, packOn(groups.get(k), W).area);
+      return soloCache.get(key);
+    };
+    // Startzuordnung: je Typ die Breite mit kleinster Solo-Fläche
+    const assign = new Map();
+    for (const k of typeKeys){
+      const fw = feasible.get(k); if (!fw.length) continue;
+      let bw = fw[0], ba = soloArea(k, bw);
+      for (const W of fw){ const a = soloArea(k,W); if (a < ba - 1e-6){ ba=a; bw=W; } }
+      assign.set(k, bw);
+    }
+    const evalAssign = (asn) => {
+      const byW = new Map();
+      for (const k of typeKeys){ const W = asn.get(k); if (!byW.has(W)) byW.set(W,[]); byW.get(W).push(...groups.get(k)); }
+      let rolls = [];
+      for (const [W, rs] of byW) rolls = rolls.concat(packOn(rs, W).rolls);
+      return rolls;
+    };
+    let curRolls = evalAssign(assign), curArea = areaOf(curRolls);
+    // Lokale Suche: einen Typ auf eine andere Breite verschieben, wenn die Gesamtfläche sinkt.
+    let improved = true, guard = 0;
+    while (improved && guard++ < 40){
+      improved = false;
+      for (const k of typeKeys){
+        for (const W of feasible.get(k)){
+          if (W === assign.get(k)) continue;
+          const trial = new Map(assign); trial.set(k, W);
+          const rolls = evalAssign(trial), a = areaOf(rolls);
+          if (a < curArea - 1e-6){ assign.set(k,W); curRolls = rolls; curArea = a; improved = true; break; }
+        }
+        if (improved) break;
+      }
+    }
+    candidates.push(curRolls);
+  })();
+
+  // Bestes Ergebnis (kleinste Materialfläche), das alle Teile enthält.
+  let best = null;
+  for (const c of candidates){
+    if (!c || !c.length) continue;
+    const placed = c.reduce((s,r)=>s + r.placed.length, 0);
+    if (placed < rects.length) continue;
+    const a = areaOf(c);
+    if (!best || a < best.a) best = { rolls:c, a };
+  }
+  const rolls = best ? best.rolls : [];
+  return { rolls, area: areaOf(rolls) };
+}
+
 // Optionaler freiwilliger Split: greedy ein Teil halbieren, neu packen, übernehmen,
-// solange jeder einzelne Schnitt die Restlänge um mindestens die Schwelle senkt.
-function applyVoluntarySplits(rects, W, buffer, minSavePct, Lmax){
+// solange jeder einzelne Schnitt die Materialfläche um mindestens die Schwelle senkt.
+function applyVoluntarySplits(rects, minSavePct, packFn){
   let current = rects.map(r=>({...r}));
-  let base = bestPack(current, W, buffer, Lmax);
+  let base = packFn(current);                       // { rolls, area }
   const MAX_ITER = 40;
   for (let iter = 0; iter < MAX_ITER; iter++){
     let bestCand = null;
@@ -981,13 +1089,13 @@ function applyVoluntarySplits(rects, W, buffer, minSavePct, Lmax){
       const p1 = { ...it, key: it.key+"-a", l:a.l, w:a.w, volSplit:true, group:(it.group||it.key)+"-v" };
       const p2 = { ...it, key: it.key+"-b", l:a.l, w:a.w, volSplit:true, group:(it.group||it.key)+"-v" };
       cand.splice(i, 1, p1, p2);
-      const res = bestPack(cand, W, buffer, Lmax);
-      const saving = base.totalLength - res.totalLength;
-      if (saving > 1e-6 && (!bestCand || res.totalLength < bestCand.res.totalLength))
+      const res = packFn(cand);
+      const saving = base.area - res.area;
+      if (saving > 1e-6 && (!bestCand || res.area < bestCand.res.area))
         bestCand = { cand, res, saving };
     }
     if (!bestCand) break;
-    const relSave = bestCand.saving / base.totalLength * 100;
+    const relSave = bestCand.saving / base.area * 100;
     if (relSave + 1e-9 < minSavePct) break;
     current = bestCand.cand;
     base = bestCand.res;
@@ -995,31 +1103,42 @@ function applyVoluntarySplits(rects, W, buffer, minSavePct, Lmax){
   return { rects: current, pack: base };
 }
 
-// Gesamt-Optimierung – Einstieg.
-function optimize(pieces, roll, buffer, allowSplit, minSavePct, axis){
-  const W = roll.width, Lmax = roll.length;
-  const { rects, warnings } = buildRects(pieces, W, Lmax, axis);
+// Gesamt-Optimierung – Einstieg. rollDef = { widths:[...], length }
+function optimize(pieces, rollDef, buffer, allowSplit, minSavePct, axis){
+  const ws = [...new Set(rollDef.widths)].sort((a,b)=>a-b);
+  const Wmax = ws[ws.length-1], Lmax = rollDef.length;
+  const { rects, warnings } = buildRects(pieces, Wmax, Lmax, axis);
   if (rects.length === 0) return { empty:true, warnings };
+
+  const packAll = (rs) => {
+    if (ws.length === 1){
+      const r = bestPack(rs, ws[0], buffer, Lmax);
+      const rolls = r.rolls.map(x => ({ W: ws[0], placed:x.placed, usedLength:x.usedLength }));
+      return { rolls, area: rolls.reduce((s,rr)=>s + rr.W*rr.usedLength, 0) };
+    }
+    return packMulti(rs, ws, Lmax, buffer);
+  };
 
   let finalRects = rects, pack;
   if (allowSplit){
-    const v = applyVoluntarySplits(rects, W, buffer, minSavePct, Lmax);
+    const v = applyVoluntarySplits(rects, minSavePct, packAll);
     finalRects = v.rects; pack = v.pack;
   } else {
-    pack = bestPack(rects, W, buffer, Lmax);
+    pack = packAll(rects);
   }
 
   const rolls = pack.rolls;
   const pieceArea = finalRects.reduce((s,r)=>s + r.l*r.w, 0);
   const totalUsed = rolls.reduce((s,r)=>s + r.usedLength, 0);
-  const usedArea  = W * totalUsed;
-  const util = usedArea > 0 ? pieceArea / usedArea : 0;
+  const consumedArea = rolls.reduce((s,r)=>s + r.W*r.usedLength, 0);
+  const util = consumedArea > 0 ? pieceArea / consumedArea : 0;
   const lastTail = rolls.length ? Lmax - rolls[rolls.length-1].usedLength : Lmax;
   const volSplitCount = countVolGroups(finalRects);
+  const widthsUsed = [...new Set(rolls.map(r=>r.W))].sort((a,b)=>a-b);
 
   return {
-    empty:false, warnings, rolls, W, Lmax, buffer,
-    totalUsed, util, lastTail, volSplitCount,
+    empty:false, warnings, rolls, widths:ws, widthsUsed, Lmax, buffer,
+    totalUsed, util, consumedArea, lastTail, volSplitCount,
     pieceCount: finalRects.length,
   };
 }
@@ -1039,7 +1158,7 @@ const fmtM = mm => (mm/1000).toLocaleString("de-DE",{minimumFractionDigits:2,max
 /* =========================================================================
    UI / STATE
    ========================================================================= */
-let selectedRoll = ROLLS[1].id;
+let selectedRolls = new Set([ROLLS[1].id]);
 let cuts = [];
 let cutSeq = 0;
 
@@ -1050,9 +1169,16 @@ function renderRolls(){
   ROLLS.forEach(r=>{
     const b = document.createElement("button");
     b.className = "roll"; b.type="button";
-    b.setAttribute("aria-pressed", r.id===selectedRoll ? "true":"false");
+    b.setAttribute("aria-pressed", selectedRolls.has(r.id) ? "true":"false");
     b.innerHTML = `<div class="rw">${r.label}</div><div class="rd">${fmt(r.width)} × ${fmt(r.length)} mm</div>`;
-    b.onclick = ()=>{ selectedRoll = r.id; renderRolls(); };
+    b.onclick = ()=>{
+      if (selectedRolls.has(r.id)){
+        if (selectedRolls.size > 1) selectedRolls.delete(r.id);   // mind. eine Breite bleibt aktiv
+      } else {
+        selectedRolls.add(r.id);
+      }
+      renderRolls();
+    };
     c.appendChild(b);
   });
 }
@@ -1235,10 +1361,11 @@ function applyExcel(){
 
 $("#xlsPick").onclick = ()=> $("#xlsFile").click();
 $("#xlsFile").addEventListener("change", e => {
-  const file = e.target.files && e.target.files[0];
+  const input = e.target;
+  const file = input.files && input.files[0];
   if (!file) return;
   $("#xlsName").textContent = file.name;
-  if (!window.XLSX){ setXlsStatus("Excel-Bibliothek konnte nicht geladen werden (Internet?).", "err"); return; }
+  if (!window.XLSX){ setXlsStatus("Excel-Bibliothek konnte nicht geladen werden (Internet?).", "err"); input.value=""; return; }
   const reader = new FileReader();
   reader.onload = ev => {
     try {
@@ -1248,8 +1375,11 @@ $("#xlsFile").addEventListener("change", e => {
     } catch(err){
       console.error(err);
       setXlsStatus("Die Datei konnte nicht gelesen werden.", "err");
+    } finally {
+      input.value = "";          // zurücksetzen: dieselbe Datei kann erneut gewählt werden
     }
   };
+  reader.onerror = ()=>{ setXlsStatus("Die Datei konnte nicht gelesen werden.", "err"); input.value=""; };
   reader.readAsArrayBuffer(file);
 });
 $("#xlsApply").onclick = applyExcel;
@@ -1259,7 +1389,8 @@ $("#xlsApply").onclick = applyExcel;
    KALKULATION + RENDERING DER ERGEBNISSE
    ========================================================================= */
 $("#calc").onclick = ()=>{
-  const roll = ROLLS.find(r=>r.id===selectedRoll);
+  const widths = ROLLS.filter(r=>selectedRolls.has(r.id)).map(r=>r.width).sort((a,b)=>a-b);
+  const rollDef = { widths, length: ROLLS[0].length };
   const buffer = Math.max(0, parseFloat($("#buffer").value) || 0);
   const allowSplit = $("#allowSplit").checked;
   const minSavePct = allowSplit ? (parseFloat($("#minSave").value)||0) : 0;
@@ -1282,38 +1413,40 @@ $("#calc").onclick = ()=>{
     return;
   }
 
-  const out = optimize(pieces, roll, buffer, allowSplit, minSavePct, splitDir);
-  lastResult = { roll, buffer, splitDir, allowSplit, minSavePct, pieces, out };
-  res.innerHTML = renderResults(out, roll);
+  const out = optimize(pieces, rollDef, buffer, allowSplit, minSavePct, splitDir);
+  lastResult = { widths, length: rollDef.length, buffer, splitDir, allowSplit, minSavePct, pieces, out };
+  res.innerHTML = renderResults(out);
   res.scrollIntoView({behavior:"smooth", block:"start"});
 };
 
-function renderResults(out, roll){
+function renderResults(out){
   if (out.empty){
     return `<div class="empty">Keine platzierbaren Schnitte gefunden.</div>`;
   }
   const utilPct = (out.util*100);
   const wastePct = 100 - utilPct;
   const today = new Date().toLocaleDateString("de-DE", { day:"2-digit", month:"2-digit", year:"numeric" });
+  const widthsTxt = out.widths.map(w=>fmt(w)).join(" / ") + " mm";
   let html = "";
 
   html += `<div class="print-head"><strong>Folien-Schnittoptimierung</strong> · Schnittplan vom ${today}</div>`;
   html += `<div class="res-top">
     <div>
       <h2 class="res-head">Ergebnis</h2>
-      <p class="res-sub">Rolle ${roll.label} · Breite ${fmt(roll.width)} mm · Puffer ${fmt(out.buffer)} mm</p>
+      <p class="res-sub">Zugelassene Breiten: ${widthsTxt} · Puffer ${fmt(out.buffer)} mm</p>
     </div>
     <button class="pdfbtn" type="button" onclick="downloadPDF()">⤓ PDF herunterladen</button>
   </div>`;
 
   // Statistik
   const utilCls = utilPct>=85 ? "good" : (utilPct<65 ? "warn":"");
+  const usedWidthsTxt = out.widthsUsed.map(w=>fmt(w)).join(" + ") + " mm";
   html += `<div class="stats">
     <div class="stat"><div class="k">Benötigte Rollen</div><div class="v">${out.rolls.length}</div></div>
-    <div class="stat"><div class="k">Verbrauchte Länge</div><div class="v">${fmtM(out.totalUsed)}<small> m</small></div></div>
+    <div class="stat"><div class="k">Genutzte Breiten</div><div class="v" style="font-size:16px">${usedWidthsTxt}</div></div>
     <div class="stat ${utilCls}"><div class="k">Materialausnutzung</div><div class="v">${utilPct.toFixed(1)}<small> %</small></div></div>
     <div class="stat"><div class="k">Verschnitt</div><div class="v">${wastePct.toFixed(1)}<small> %</small></div></div>
-    <div class="stat"><div class="k">Rest auf letzter Rolle</div><div class="v">${fmtM(out.lastTail)}<small> m</small></div></div>
+    <div class="stat"><div class="k">Verbrauchte Länge</div><div class="v">${fmtM(out.totalUsed)}<small> m</small></div></div>
     <div class="stat"><div class="k">Teile platziert</div><div class="v">${out.pieceCount}</div></div>
   </div>`;
 
@@ -1327,9 +1460,9 @@ function renderResults(out, roll){
   // Layout je Rolle
   out.rolls.forEach((r, ri)=>{
     html += `<div class="roll-out">
-      <h3>Rolle ${ri+1} <span class="rmeta">belegt ${fmtM(r.usedLength)} m von ${fmtM(roll.length)} m</span></h3>
-      <div class="layout-scroll">${renderSVG(r, out.W, out.buffer)}</div>`;
-    html += renderPlanTable(r, out.W);
+      <h3>Rolle ${ri+1} · Breite ${fmt(r.W)} mm <span class="rmeta">belegt ${fmtM(r.usedLength)} m von ${fmtM(out.Lmax)} m</span></h3>
+      <div class="layout-scroll">${renderSVG(r, r.W, out.buffer)}</div>`;
+    html += renderPlanTable(r, r.W);
     html += `</div>`;
   });
 
@@ -1481,7 +1614,7 @@ function buildPdf(jsPDF, L){
 
   /* ---------- Eingabedaten ---------- */
   sectionTitle("Eingabedaten");
-  kv("Rolle", `${L.roll.label}  (${fmt(L.roll.width)} × ${fmt(L.roll.length)} mm)`);
+  kv("Zugel. Breiten", `${L.widths.map(w=>fmt(w)).join(" / ")} mm  ·  Länge ${fmt(L.length)} mm`);
   kv("Puffer", `${fmt(L.buffer)} mm`);
   kv("Splitrichtung", `${L.splitDir} (Übergröße ${L.splitDir==="horizontal" ? "über die Höhe" : "über die Breite"})`);
   kv("Freiwillige Splits", L.allowSplit ? `erlaubt (Mindest-Ersparnis ${fmt(L.minSavePct)} %)` : "aus");
@@ -1542,11 +1675,11 @@ function buildPdf(jsPDF, L){
   o.rolls.forEach((r,ri)=>{
     ensure(16);
     doc.setFont("helvetica","bold"); doc.setFontSize(12); setText(INK);
-    doc.text(`Rolle ${ri+1}`, M, y);
+    doc.text(`Rolle ${ri+1} · Breite ${fmt(r.W)} mm`, M, y);
     doc.setFont("helvetica","normal"); doc.setFontSize(9); setText(MUT);
-    doc.text(`belegt ${fmtM(r.usedLength)} m von ${fmtM(L.roll.length)} m`, M+24, y);
+    doc.text(`belegt ${fmtM(r.usedLength)} m von ${fmtM(L.length)} m`, M+60, y);
     y+=5;
-    drawLayout(r, o.W);
+    drawLayout(r, r.W);
     y+=4;
     tableBlock(
       ["Nr.","Name","Maß B×H (mm)","Position L / Q (mm)"],
