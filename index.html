@@ -1722,27 +1722,31 @@ function buildPdf(jsPDF, L){
     y+=3;
   }
 
-  /* ---------- je Rolle ---------- */
+  /* ---------- je Rolle: eigene Seite, Grafik links + Liste rechts ---------- */
   o.rolls.forEach((r,ri)=>{
-    ensure(16);
-    doc.setFont("helvetica","bold"); doc.setFontSize(12); setText(INK);
-    doc.text(`Rolle ${ri+1} · Breite ${fmt(r.W)} mm`, M, y);
-    doc.setFont("helvetica","normal"); doc.setFontSize(9); setText(MUT);
-    doc.text(`belegt ${fmtM(r.usedLength)} m von ${fmtM(L.length)} m`, M+60, y);
-    y+=5;
-    drawLayout(r, r.W);
-    y+=4;
-    tableBlock(
-      ["Nr.","Name","Maß B×H (mm)","Position L / Q (mm)"],
-      [0.10,0.40,0.25,0.25],
-      [...r.placed].sort((a,b)=>a.py-b.py||a.px-b.px).map((it,i)=>{
-        const tags=[]; if(it.mandSplit)tags.push("Split"); if(it.volSplit)tags.push("Frei-Split"); if(it.rot)tags.push("gedreht");
-        const nm = (it.name||"") + (tags.length?` [${tags.join(", ")}]`:"");
-        return [ String(i+1), nm, `${fmt(it.w)} × ${fmt(it.l)}`, `${fmt(it.py)} / ${fmt(it.px)}` ];
-      }),
-      [true,false,true,true]
-    );
-    y+=6;
+    doc.addPage(); y = M;
+    doc.setFont("helvetica","bold"); doc.setFontSize(13); setText(INK);
+    doc.text(`Rolle ${ri+1} · Breite ${fmt(r.W)} mm`, M, y+1);
+    doc.setFont("helvetica","normal"); doc.setFontSize(9.5); setText(MUT);
+    doc.text(`belegt ${fmtM(r.usedLength)} m von ${fmtM(L.length)} m`, M, y+6.5);
+    y += 11; setDraw(LINE); doc.setLineWidth(0.3); doc.line(M,y,PW-M,y); y += 5;
+
+    const topY = y, availH = bottom - topY - 4;
+    const rulerW = 11, drawW = 80, gap = 8;
+    const schematic = drawRollLayout(r, r.W, M, topY, rulerW, drawW, availH);
+
+    const xT = M + rulerW + drawW + gap, wT = (PW-M) - xT;
+    const rows = [...r.placed].sort((a,b)=>a.py-b.py||a.px-b.px).map((it,i)=>{
+      const tags=[]; if(it.mandSplit)tags.push("Split"); if(it.volSplit)tags.push("Frei"); if(it.rot)tags.push("gedreht");
+      const nm = (it.name||"") + (tags.length?` [${tags.join(", ")}]`:"");
+      return [ String(i+1), nm, `${fmt(it.w)}×${fmt(it.l)}`, `${fmt(it.py)} / ${fmt(it.px)}` ];
+    });
+    sideTable(["Nr.","Name","B×H (mm)","Pos L/Q (mm)"], [0.11,0.40,0.27,0.22], rows, xT, wT, topY);
+
+    if (schematic){
+      doc.setFont("helvetica","italic"); doc.setFontSize(7); setText(FAINT);
+      doc.text("Grafik längs gestaucht (nicht maßstabsgetreu) – Maße siehe Liste", M, bottom+1);
+    }
   });
 
   return doc;
@@ -1770,53 +1774,72 @@ function buildPdf(jsPDF, L){
     });
   }
 
-  function drawLayout(r, W){
-    const rulerW = 13;
-    let targetW = 60;
-    let scale = targetW / W;
-    let drawH = r.usedLength * scale;
-    const availH = bottom - y - 2;
-    const maxH = Math.min(availH, PH - 2*M - 4);
-    if (drawH > maxH){ scale = maxH / r.usedLength; drawH = maxH; targetW = W*scale; }
-    if (y + drawH > bottom){ doc.addPage(); y=M; const aH=PH-2*M-4; if(drawH>aH){ scale=aH/r.usedLength; drawH=aH; targetW=W*scale; } }
+  function drawRollLayout(r, W, xLeft, topY, rulerW, drawW, availH){
+    const x0 = xLeft + rulerW;
+    const widthScale = drawW / W;
+    let yScale = widthScale, schematic = false;          // erst maßstabsgetreu versuchen
+    let drawH = r.usedLength * yScale;
+    if (drawH > availH){ yScale = availH / r.usedLength; drawH = availH; schematic = true; }
+    const y0 = topY;
 
-    const x0 = M + rulerW, y0 = y;
-    // Hintergrund
     setFill([247,248,245]); setDraw([199,203,193]); doc.setLineWidth(0.3);
-    doc.rect(x0, y0, targetW, drawH, "FD");
+    doc.rect(x0, y0, drawW, drawH, "FD");
 
-    // Lineal
+    // Lineal (echte mm)
     const steps=[50,100,250,500,1000,2000,5000,10000];
-    const targetStep = 18/scale;
+    const targetStep = 16/yScale;
     const step = steps.reduce((a,b)=> Math.abs(b-targetStep)<Math.abs(a-targetStep)?b:a);
     doc.setFont("courier","normal"); doc.setFontSize(6); setText(FAINT); setDraw([180,184,176]); doc.setLineWidth(0.2);
     for (let mm=0; mm<=r.usedLength+1; mm+=step){
-      const yy = y0 + mm*scale;
-      doc.line(x0-1.5, yy, x0, yy);
-      doc.text(fmt(mm), x0-2, yy+1, { align:"right" });
+      const yy=y0+mm*yScale; doc.line(x0-1.5,yy,x0,yy); doc.text(fmt(mm), x0-2, yy+1, {align:"right"});
     }
 
     // Teile
     r.placed.forEach(it=>{
-      const px=x0+it.px*scale, py=y0+it.py*scale, pw=it.pw*scale, ph=it.ph*scale;
-      const rgb = hexToRgb(PALETTE[it.typeIdx % PALETTE.length]);
+      const px=x0+it.px*widthScale, py=y0+it.py*yScale, pw=it.pw*widthScale, ph=it.ph*yScale;
+      const rgb=hexToRgb(PALETTE[it.typeIdx % PALETTE.length]);
       setFill(tint(rgb,0.5));
-      const seam = it.mandSplit || it.volSplit;
+      const seam=it.mandSplit||it.volSplit;
       if (seam){ setDraw(ACC); doc.setLineWidth(0.4); doc.setLineDashPattern([1.1,0.8],0); }
       else     { setDraw([58,64,72]); doc.setLineWidth(0.25); doc.setLineDashPattern([],0); }
-      doc.rect(px, py, pw, ph, "FD");
-      doc.setLineDashPattern([],0);
-      // Beschriftung
-      if (pw>14 && ph>7){
-        setText(INK);
-        doc.setFont("helvetica","bold"); doc.setFontSize(6.5);
+      doc.rect(px,py,pw,ph,"FD"); doc.setLineDashPattern([],0);
+      // Beschriftung – Schriftgröße an die Schnittgröße anpassen
+      if (pw>9 && ph>3.2){
+        const showDim = ph>8.5;
+        let fs = Math.max(4.5, Math.min(8, ph*(showDim?0.9:1.5), pw*0.7));
+        setText(INK); doc.setFont("helvetica","bold"); doc.setFontSize(fs);
         const nm = doc.splitTextToSize(it.name||"", pw-2)[0] || "";
-        doc.text(nm, px+pw/2, py+ph/2-0.3, { align:"center" });
-        doc.setFont("courier","normal"); doc.setFontSize(5.5); setText([70,70,70]);
-        doc.text(`${fmt(it.w)}×${fmt(it.l)}`, px+pw/2, py+ph/2+2.6, { align:"center" });
+        doc.text(nm, px+pw/2, py+ph/2 + (showDim?-0.4:fs*0.18), { align:"center" });
+        if (showDim){
+          doc.setFont("courier","normal"); doc.setFontSize(Math.max(4.2, fs*0.78)); setText([70,70,70]);
+          doc.text(`${fmt(it.w)}×${fmt(it.l)}`, px+pw/2, py+ph/2 + fs*0.55, { align:"center" });
+        }
       }
     });
-    y = y0 + drawH;
+    return schematic;
+  }
+
+  function sideTable(headers, fracs, rows, xT, wT, topY){
+    const xs=[]; let acc=xT; fracs.forEach(f=>{ xs.push(acc); acc+=f*wT; });
+    let yy=topY;
+    doc.setFont("helvetica","bold"); doc.setFontSize(7); setText(FAINT);
+    headers.forEach((h,i)=> doc.text(h.toUpperCase(), xs[i], yy));
+    yy+=1.4; setDraw(LINE); doc.setLineWidth(0.3); doc.line(xT,yy,xT+wT,yy); yy+=3;
+    doc.setFontSize(7.5);
+    rows.forEach((row,ri)=>{
+      const cells=row.map((c,i)=> doc.splitTextToSize(String(c), fracs[i]*wT - 1.5));
+      const hgt=Math.max(...cells.map(c=>c.length))*3.4 + 1.4;
+      if (yy+hgt > bottom){                     // sehr lange Liste: auf neuer Seite fortsetzen
+        doc.addPage(); yy=M;
+        doc.setFont("helvetica","bold"); doc.setFontSize(7); setText(FAINT);
+        headers.forEach((h,i)=> doc.text(h.toUpperCase(), xs[i], yy));
+        yy+=1.4; setDraw(LINE); doc.line(xT,yy,xT+wT,yy); yy+=3; doc.setFontSize(7.5);
+      }
+      setText(INK);
+      cells.forEach((c,i)=>{ doc.setFont(i===1?"helvetica":"courier","normal"); doc.text(c, xs[i], yy); });
+      yy+=hgt; setDraw([235,237,233]); doc.setLineWidth(0.2); doc.line(xT,yy-2.1,xT+wT,yy-2.1);
+    });
+    return yy;
   }
 }
 
