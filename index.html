@@ -688,6 +688,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   <!-- STEP 1 -->
   <section class="card">
     <div class="card-head"><span class="step-no">1</span><h2>Rolle wählen</h2></div>
+    <div class="field">
+      <label class="flbl" for="projName">Projektname</label>
+      <input type="text" id="projName" placeholder="wird für den PDF-Dateinamen verwendet (Verschnittplan_…)">
+    </div>
     <div class="rolls" id="rolls"></div>
     <div class="buffer-note" style="padding-bottom:0;margin-top:10px;">Mehrere Breiten anklickbar – der Optimierer wählt automatisch die beste Kombination (bei Bedarf auch gemischt), um den Verschnitt zu minimieren.</div>
     <div class="field buffer-row">
@@ -707,10 +711,6 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   <!-- STEP 2 -->
   <section class="card">
     <div class="card-head"><span class="step-no">2</span><h2>Schnitte eingeben</h2></div>
-    <div class="field">
-      <label class="flbl" for="projName">Projektname</label>
-      <input type="text" id="projName" placeholder="wird für den PDF-Dateinamen verwendet (Verschnittplan_…)">
-    </div>
     <div class="upload">
       <div class="upload-row">
         <button type="button" class="upload-btn" id="xlsPick">Excel-Datei wählen</button>
@@ -1184,8 +1184,22 @@ function optimize(pieces, rollDef, buffer, allowSplit, minSavePct, axis){
 
   const rolls = pack.rolls;
   const pieceArea = finalRects.reduce((s,r)=>s + r.l*r.w, 0);
-  const totalUsed = rolls.reduce((s,r)=>s + r.usedLength, 0);
-  const consumedArea = rolls.reduce((s,r)=>s + r.W*r.usedLength, 0);
+
+  // Verbrauch je Breite: alle Rollen außer der letzten (am wenigsten belegten) zählen voll (Lmax),
+  // die letzte zählt nur die tatsächlich belegte Länge.
+  const grp = new Map();
+  for (const r of rolls){ if (!grp.has(r.W)) grp.set(r.W,[]); grp.get(r.W).push(r.usedLength); }
+  const perWidth = [];
+  for (const [W, lens] of grp){
+    lens.sort((a,b)=>b-a);                          // längste zuerst -> letzte (kürzeste) = Teilrolle
+    const partial = lens[lens.length-1];
+    const billed = Lmax*(lens.length-1) + partial;  // nicht-letzte voll, letzte belegt
+    perWidth.push({ W, rolls: lens.length, billedLength: billed, partial, area: W*billed });
+  }
+  perWidth.sort((a,b)=>a.W-b.W);
+
+  const totalUsed = perWidth.reduce((s,w)=>s + w.billedLength, 0);
+  const consumedArea = perWidth.reduce((s,w)=>s + w.area, 0);
   const util = consumedArea > 0 ? pieceArea / consumedArea : 0;
   const lastTail = rolls.length ? Lmax - rolls[rolls.length-1].usedLength : Lmax;
   const volSplitCount = countVolGroups(finalRects);
@@ -1193,7 +1207,7 @@ function optimize(pieces, rollDef, buffer, allowSplit, minSavePct, axis){
 
   return {
     empty:false, warnings, rolls, widths:ws, widthsUsed, Lmax, buffer,
-    totalUsed, util, consumedArea, lastTail, volSplitCount,
+    totalUsed, util, consumedArea, lastTail, volSplitCount, perWidth,
     pieceCount: finalRects.length,
   };
 }
@@ -1506,19 +1520,16 @@ function renderResults(out){
     <div class="stat"><div class="k">Teile platziert</div><div class="v">${out.pieceCount}</div></div>
   </div>`;
 
-  // Verbrauch je Rollenbreite
-  const byW = {};
-  out.rolls.forEach(r=>{ if(!byW[r.W]) byW[r.W]={W:r.W,rolls:0,len:0}; byW[r.W].rolls++; byW[r.W].len+=r.usedLength; });
-  const wRows = Object.values(byW).sort((a,b)=>a.W-b.W);
+  // Verbrauch je Rollenbreite (nicht-letzte Rollen voll gezählt)
   const qm = mm2 => (mm2/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
   html += `<div class="roll-out"><h3>Verbrauch je Rollenbreite</h3>
     <table class="plan">
       <thead><tr><th>Breite</th><th>Rollen</th><th>Verbrauchte Länge</th><th>Materialfläche</th></tr></thead>
-      <tbody>${wRows.map(w=>`<tr>
+      <tbody>${out.perWidth.map(w=>`<tr>
         <td>${fmt(w.W)} mm</td>
         <td class="num">${w.rolls}</td>
-        <td class="num">${fmtM(w.len)} m</td>
-        <td class="num">${qm(w.W*w.len)} m²</td>
+        <td class="num">${fmtM(w.billedLength)} m</td>
+        <td class="num">${qm(w.area)} m²</td>
       </tr>`).join("")}</tbody>
     </table></div>`;
 
@@ -1727,11 +1738,8 @@ function buildPdf(jsPDF, L){
   }
   y+=2;
 
-  // Verbrauch je Rollenbreite
+  // Verbrauch je Rollenbreite (nicht-letzte Rollen voll gezählt)
   {
-    const byW = {};
-    o.rolls.forEach(r=>{ if(!byW[r.W]) byW[r.W]={W:r.W,rolls:0,len:0}; byW[r.W].rolls++; byW[r.W].len+=r.usedLength; });
-    const wRows = Object.values(byW).sort((a,b)=>a.W-b.W);
     const qm = mm2 => (mm2/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
     ensure(8);
     doc.setFont("helvetica","bold"); doc.setFontSize(9.5); setText(INK);
@@ -1739,7 +1747,7 @@ function buildPdf(jsPDF, L){
     tableBlock(
       ["Breite (mm)","Rollen","Verbrauchte Länge","Materialfläche (qm)"],
       [0.28,0.16,0.30,0.26],
-      wRows.map(w => [ fmt(w.W), String(w.rolls), `${fmtM(w.len)} m`, qm(w.W*w.len) ]),
+      o.perWidth.map(w => [ fmt(w.W), String(w.rolls), `${fmtM(w.billedLength)} m`, qm(w.area) ]),
       [true,true,true,true]
     );
     y+=4;
