@@ -1516,7 +1516,7 @@ function renderResults(out){
     <div class="stat"><div class="k">Genutzte Breiten</div><div class="v" style="font-size:16px">${usedWidthsTxt}</div></div>
     <div class="stat ${utilCls}"><div class="k">Materialausnutzung</div><div class="v">${utilPct.toFixed(1)}<small> %</small></div></div>
     <div class="stat"><div class="k">Verschnitt</div><div class="v">${wastePct.toFixed(1)}<small> %</small></div></div>
-    <div class="stat"><div class="k">Verbrauchte Länge</div><div class="v">${fmtM(out.totalUsed)}<small> m</small></div></div>
+    <div class="stat"><div class="k">Materialfläche gesamt</div><div class="v">${(out.consumedArea/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})}<small> m²</small></div></div>
     <div class="stat"><div class="k">Teile platziert</div><div class="v">${out.pieceCount}</div></div>
   </div>`;
 
@@ -1530,7 +1530,9 @@ function renderResults(out){
         <td class="num">${w.rolls}</td>
         <td class="num">${fmtM(w.billedLength)} m</td>
         <td class="num">${qm(w.area)} m²</td>
-      </tr>`).join("")}</tbody>
+      </tr>`).join("")}
+      <tr class="sumrow"><td><strong>Gesamt</strong></td><td class="num"><strong>${out.rolls.length}</strong></td><td class="num"><strong>${fmtM(out.totalUsed)} m</strong></td><td class="num"><strong>${qm(out.consumedArea)} m²</strong></td></tr>
+      </tbody>
     </table></div>`;
 
   // Hinweise
@@ -1717,7 +1719,7 @@ function buildPdf(jsPDF, L){
   sectionTitle("Ergebnis");
   const stats = [
     ["Benötigte Rollen", String(o.rolls.length)],
-    ["Verbrauchte Länge", `${fmtM(o.totalUsed)} m`],
+    ["Materialfläche gesamt", `${(o.consumedArea/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})} qm`],
     ["Materialausnutzung", `${(o.util*100).toFixed(1)} %`],
     ["Verschnitt", `${(100-o.util*100).toFixed(1)} %`],
     ["Rest auf letzter Rolle", `${fmtM(o.lastTail)} m`],
@@ -1741,16 +1743,27 @@ function buildPdf(jsPDF, L){
   // Verbrauch je Rollenbreite (nicht-letzte Rollen voll gezählt)
   {
     const qm = mm2 => (mm2/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
+    const fracs = [0.28,0.16,0.30,0.26];
     ensure(8);
     doc.setFont("helvetica","bold"); doc.setFontSize(9.5); setText(INK);
     doc.text("Verbrauch je Rollenbreite", M, y); y+=4;
     tableBlock(
       ["Breite (mm)","Rollen","Verbrauchte Länge","Materialfläche (qm)"],
-      [0.28,0.16,0.30,0.26],
+      fracs,
       o.perWidth.map(w => [ fmt(w.W), String(w.rolls), `${fmtM(w.billedLength)} m`, qm(w.area) ]),
       [true,true,true,true]
     );
-    y+=4;
+    // Gesamtsumme
+    ensure(7);
+    const xs=[]; let acc=M; fracs.forEach(f=>{ xs.push(acc); acc+=f*cw; });
+    setDraw(LINE); doc.setLineWidth(0.4); doc.line(M, y-1, PW-M, y-1); y+=2.5;
+    doc.setFont("helvetica","bold"); doc.setFontSize(8.5); setText(INK);
+    doc.text("Gesamt", xs[0], y);
+    doc.setFont("courier","bold");
+    doc.text(String(o.rolls.length), xs[1], y);
+    doc.text(`${fmtM(o.totalUsed)} m`, xs[2], y);
+    doc.text(qm(o.consumedArea), xs[3], y);
+    y+=6;
   }
 
   // Hinweise
