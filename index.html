@@ -966,6 +966,7 @@ function bestPack(rects, W, buffer, Lmax){
 function packMulti(rects, widths, Lmax, buffer){
   const ws = [...new Set(widths)].sort((a,b)=>a-b);
   const areaOf = rolls => rolls.reduce((s,r)=> s + r.W*r.usedLength, 0);
+  const rotOf  = rolls => rolls.reduce((s,r)=> s + r.placed.filter(p=>p.rot).length, 0);
   const fitsW = (r,W) => Math.min(r.l,r.w) <= W+1e-6;
 
   // Packt eine Teilmenge auf Breite W -> Rollen + Fläche.
@@ -1037,8 +1038,9 @@ function packMulti(rects, widths, Lmax, buffer){
       for (const [W, rs] of byW) rolls = rolls.concat(packOn(rs, W).rolls);
       return rolls;
     };
-    let curRolls = evalAssign(assign), curArea = areaOf(curRolls);
-    // Lokale Suche: einen Typ auf eine andere Breite verschieben, wenn die Gesamtfläche sinkt.
+    let curRolls = evalAssign(assign);
+    let curArea = areaOf(curRolls), curRot = rotOf(curRolls);
+    // Lokale Suche: Typ verschieben, wenn Fläche sinkt – oder bei gleicher Fläche weniger gedreht wird.
     let improved = true, guard = 0;
     while (improved && guard++ < 40){
       improved = false;
@@ -1046,25 +1048,49 @@ function packMulti(rects, widths, Lmax, buffer){
         for (const W of feasible.get(k)){
           if (W === assign.get(k)) continue;
           const trial = new Map(assign); trial.set(k, W);
-          const rolls = evalAssign(trial), a = areaOf(rolls);
-          if (a < curArea - 1e-6){ assign.set(k,W); curRolls = rolls; curArea = a; improved = true; break; }
+          const rolls = evalAssign(trial), a = areaOf(rolls), rt = rotOf(rolls);
+          if (a < curArea - 1e-6 || (Math.abs(a-curArea) <= 1e-6 && rt < curRot)){
+            assign.set(k,W); curRolls = rolls; curArea = a; curRot = rt; improved = true; break;
+          }
         }
         if (improved) break;
       }
     }
     candidates.push(curRolls);
+
+    // Zweiter Durchgang: bei nahezu gleicher Fläche die Anzahl der Drehungen senken.
+    const optArea = curArea;
+    const epsRot = optArea * 0.002;                    // 0,2 % Toleranz
+    let r2 = true, g2 = 0;
+    while (r2 && g2++ < 40){
+      r2 = false;
+      for (const k of typeKeys){
+        for (const W of feasible.get(k)){
+          if (W === assign.get(k)) continue;
+          const trial = new Map(assign); trial.set(k, W);
+          const rolls = evalAssign(trial), a = areaOf(rolls), rt = rotOf(rolls);
+          if (a <= optArea + epsRot && rt < curRot - 1e-9){
+            assign.set(k,W); curRolls = rolls; curArea = a; curRot = rt; r2 = true; break;
+          }
+        }
+        if (r2) break;
+      }
+    }
+    candidates.push(curRolls);
   })();
 
-  // Bestes Ergebnis (kleinste Materialfläche), das alle Teile enthält.
-  let best = null;
-  for (const c of candidates){
-    if (!c || !c.length) continue;
-    const placed = c.reduce((s,r)=>s + r.placed.length, 0);
-    if (placed < rects.length) continue;
-    const a = areaOf(c);
-    if (!best || a < best.a) best = { rolls:c, a };
+  // Bestes Ergebnis: kleinste Materialfläche; bei (nahezu) gleicher Fläche die mit den wenigsten Drehungen.
+  const valid = candidates
+    .filter(c => c && c.length && c.reduce((s,r)=>s + r.placed.length, 0) >= rects.length)
+    .map(c => ({ rolls:c, area: areaOf(c), rot: rotOf(c) }));
+  let rolls = [];
+  if (valid.length){
+    const minArea = Math.min(...valid.map(v => v.area));
+    const eps = minArea * 0.002;                       // 0,2 % Toleranz für „gleiche" Fläche
+    const near = valid.filter(v => v.area <= minArea + eps);
+    near.sort((a,b) => a.rot - b.rot || a.area - b.area);
+    rolls = near[0].rolls;
   }
-  const rolls = best ? best.rolls : [];
   return { rolls, area: areaOf(rolls) };
 }
 
