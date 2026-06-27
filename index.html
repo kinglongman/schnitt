@@ -936,10 +936,35 @@ function guillotinePack(rects, W, Lmax, buffer, opts){
     mergeFree(bin.free);
   }
 
+  // Nachbearbeitung: Teile am Rollenende drehen, wenn das die belegte Länge verkürzt.
+  for (const b of bins) shrinkBin(b.placed, W, buffer);
+
   const rolls = bins
     .map(b => ({ placed: b.placed, usedLength: b.placed.reduce((m,p)=>Math.max(m, p.py + p.ph), 0) }))
     .filter(r => r.placed.length > 0);
   return { rolls, totalLength: rolls.reduce((s,r)=>s + r.usedLength, 0), nRolls: rolls.length };
+}
+
+// Dreht einzelne Teile, die das Rollenende bestimmen, falls gedreht kürzer und überlappungsfrei.
+function shrinkBin(placed, W, buffer){
+  const overlaps = (p, pw, ph) => placed.some(q => q !== p &&
+    p.px < q.px + q.pw + buffer - 1e-6 && q.px - buffer < p.px + pw - 1e-6 &&
+    p.py < q.py + q.ph + buffer - 1e-6 && q.py - buffer < p.py + ph - 1e-6);
+  let changed = true, guard = 0;
+  while (changed && guard++ < 200){
+    changed = false;
+    const usedLen = placed.reduce((m,p)=>Math.max(m, p.py + p.ph), 0);
+    for (const p of placed){
+      if (p.py + p.ph < usedLen - 1e-6) continue;        // nur Teile am Rollenende
+      const npw = p.ph, nph = p.pw;                       // gedreht
+      if (Math.abs(npw - p.pw) < 1e-6) continue;          // quadratisch -> nichts zu gewinnen
+      if (nph >= p.ph - 1e-6) continue;                   // wird nicht kürzer
+      if (p.px + npw > W + 1e-6) continue;                // passt nicht in die Breite
+      if (overlaps(p, npw, nph)) continue;                // würde überlappen
+      p.pw = npw; p.ph = nph; p.rot = !p.rot;
+      changed = true; break;
+    }
+  }
 }
 
 // Portfolio mehrerer Strategien – gewertet nach Rollenzahl, dann Gesamtlänge.
