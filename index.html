@@ -707,6 +707,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   <!-- STEP 2 -->
   <section class="card">
     <div class="card-head"><span class="step-no">2</span><h2>Schnitte eingeben</h2></div>
+    <div class="field">
+      <label class="flbl" for="projName">Projektname</label>
+      <input type="text" id="projName" placeholder="wird für den PDF-Dateinamen verwendet (Verschnittplan_…)">
+    </div>
     <div class="upload">
       <div class="upload-row">
         <button type="button" class="upload-btn" id="xlsPick">Excel-Datei wählen</button>
@@ -1465,7 +1469,8 @@ $("#calc").onclick = ()=>{
   }
 
   const out = optimize(pieces, rollDef, buffer, allowSplit, minSavePct, splitDir);
-  lastResult = { widths, length: rollDef.length, buffer, splitDir, allowSplit, minSavePct, pieces, out };
+  const projName = (document.getElementById("projName").value || "").trim();
+  lastResult = { projName, widths, length: rollDef.length, buffer, splitDir, allowSplit, minSavePct, pieces, out };
   res.innerHTML = renderResults(out);
   res.scrollIntoView({behavior:"smooth", block:"start"});
 };
@@ -1476,11 +1481,11 @@ function renderResults(out){
   }
   const utilPct = (out.util*100);
   const wastePct = 100 - utilPct;
-  const today = new Date().toLocaleDateString("de-DE", { day:"2-digit", month:"2-digit", year:"numeric" });
+  const projName = (document.getElementById("projName")?.value || "").trim();
   const widthsTxt = out.widths.map(w=>fmt(w)).join(" / ") + " mm";
   let html = "";
 
-  html += `<div class="print-head"><strong>Folien-Schnittoptimierung</strong> · Schnittplan vom ${today}</div>`;
+  html += `<div class="print-head"><strong>Folien-Schnittoptimierung</strong>${projName?` · ${esc(projName)}`:""}</div>`;
   html += `<div class="res-top">
     <div>
       <h2 class="res-head">Ergebnis</h2>
@@ -1500,6 +1505,22 @@ function renderResults(out){
     <div class="stat"><div class="k">Verbrauchte Länge</div><div class="v">${fmtM(out.totalUsed)}<small> m</small></div></div>
     <div class="stat"><div class="k">Teile platziert</div><div class="v">${out.pieceCount}</div></div>
   </div>`;
+
+  // Verbrauch je Rollenbreite
+  const byW = {};
+  out.rolls.forEach(r=>{ if(!byW[r.W]) byW[r.W]={W:r.W,rolls:0,len:0}; byW[r.W].rolls++; byW[r.W].len+=r.usedLength; });
+  const wRows = Object.values(byW).sort((a,b)=>a.W-b.W);
+  const qm = mm2 => (mm2/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
+  html += `<div class="roll-out"><h3>Verbrauch je Rollenbreite</h3>
+    <table class="plan">
+      <thead><tr><th>Breite</th><th>Rollen</th><th>Verbrauchte Länge</th><th>Materialfläche</th></tr></thead>
+      <tbody>${wRows.map(w=>`<tr>
+        <td>${fmt(w.W)} mm</td>
+        <td class="num">${w.rolls}</td>
+        <td class="num">${fmtM(w.len)} m</td>
+        <td class="num">${qm(w.W*w.len)} m²</td>
+      </tr>`).join("")}</tbody>
+    </table></div>`;
 
   // Hinweise
   const notes = [...out.warnings];
@@ -1610,9 +1631,8 @@ function downloadPDF(){
     }
     if (!lastResult){ return; }
     const doc = buildPdf(window.jspdf.jsPDF, lastResult);
-    const d = new Date();
-    const stamp = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-    doc.save(`Schnittplan_${stamp}.pdf`);
+    const safe = (lastResult.projName||"").trim().replace(/[\\/:*?"<>|]+/g,"").replace(/\s+/g,"_");
+    doc.save(safe ? `Verschnittplan_${safe}.pdf` : "Verschnittplan.pdf");
   } catch(err){
     console.error(err);
     alert("PDF konnte nicht erstellt werden. Es wird der Druckdialog geöffnet.");
@@ -1660,7 +1680,8 @@ function buildPdf(jsPDF, L){
   doc.setFont("helvetica","bold"); doc.setFontSize(18); setText(INK);
   doc.text("Folien-Schnittoptimierung", M, y+4); y+=9.5;
   doc.setFont("helvetica","normal"); doc.setFontSize(10); setText(MUT);
-  doc.text("Schnittplan vom "+today, M, y); y+=3.5;
+  if (L.projName) doc.text(L.projName, M, y);
+  y+=3.5;
   setDraw(INK); doc.setLineWidth(0.5); doc.line(M,y,PW-M,y); y+=8;
 
   /* ---------- Eingabedaten ---------- */
@@ -1705,6 +1726,24 @@ function buildPdf(jsPDF, L){
     y+=13;
   }
   y+=2;
+
+  // Verbrauch je Rollenbreite
+  {
+    const byW = {};
+    o.rolls.forEach(r=>{ if(!byW[r.W]) byW[r.W]={W:r.W,rolls:0,len:0}; byW[r.W].rolls++; byW[r.W].len+=r.usedLength; });
+    const wRows = Object.values(byW).sort((a,b)=>a.W-b.W);
+    const qm = mm2 => (mm2/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
+    ensure(8);
+    doc.setFont("helvetica","bold"); doc.setFontSize(9.5); setText(INK);
+    doc.text("Verbrauch je Rollenbreite", M, y); y+=4;
+    tableBlock(
+      ["Breite (mm)","Rollen","Verbrauchte Länge","Materialfläche (qm)"],
+      [0.28,0.16,0.30,0.26],
+      wRows.map(w => [ fmt(w.W), String(w.rolls), `${fmtM(w.len)} m`, qm(w.W*w.len) ]),
+      [true,true,true,true]
+    );
+    y+=4;
+  }
 
   // Hinweise
   const notes = [...(o.warnings||[])];
