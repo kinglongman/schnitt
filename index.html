@@ -971,7 +971,139 @@ function shrinkBin(placed, W, buffer){
   }
 }
 
-// Portfolio mehrerer Strategien – gewertet nach Rollenzahl, dann Gesamtlänge.
+// Maschinen-Grenze: höchstens so viele Schnitte nebeneinander über die Rollenbreite.
+const MAX_ACROSS = 4;
+// Pflicht-Zusatzspalt zwischen dem 3. und 4. Schnitt, wenn 4 nebeneinander liegen (mm).
+const GAP_34 = 3;
+
+// Größte Anzahl Teile, die irgendwo über die Breite gleichzeitig nebeneinander liegen.
+function maxAcross(placed){
+  const evs = [];
+  for (const p of placed){ evs.push([p.py, 1]); evs.push([p.py + p.ph, -1]); }
+  evs.sort((u,v)=> u[0]-v[0] || u[1]-v[1]);
+  let cur = 0, mx = 0;
+  for (const [, d] of evs){ cur += d; if (cur > mx) mx = cur; }
+  return mx;
+}
+function resultAcrossOK(r){ return r.rolls.every(b => maxAcross(b.placed) <= MAX_ACROSS); }
+
+// Spalten-Packung für gleichartige Schnitte (eine Fußabdruck-Größe).
+// Bildet senkrechte Spalten über die Breite; jede Spalte stapelt Teile gleicher Quer-Maße
+// in einer Orientierung. Mischt Orientierungen über die Spalten -> oft deutlich dichter.
+function columnPack(rects, W, Lmax, buffer){
+  if (!rects.length) return null;
+  const sig = r => { const a=Math.min(r.w,r.l), b=Math.max(r.w,r.l); return a.toFixed(3)+"|"+b.toFixed(3); };
+  const s0 = sig(rects[0]);
+  if (!rects.every(r => sig(r) === s0)) return null;     // nur bei einheitlicher Größe
+  const d1 = Math.min(rects[0].w, rects[0].l);
+  const d2 = Math.max(rects[0].w, rects[0].l);
+  if (d1 > W + 1e-6) return null;                         // passt nicht mal hochkant -> Guillotine
+  const Winf = W + buffer, Linf = Lmax + buffer;
+  const capA = Math.floor(Linf / (d2 + buffer));          // Spalte quer=d1, Teil-Länge=d2
+  const capB = Math.floor(Linf / (d1 + buffer));          // Spalte quer=d2, Teil-Länge=d1
+  if (capA <= 0 && capB <= 0) return null;
+
+  const structures = [];
+  const maxA = Math.min(MAX_ACROSS, Math.floor(Winf / (d1 + buffer)));
+  for (let a = 0; a <= maxA; a++){
+    const remB = Winf - a*(d1 + buffer);
+    let b = Math.max(0, Math.floor(remB / (d2 + buffer)));
+    b = Math.min(b, MAX_ACROSS - a);                      // höchstens MAX_ACROSS Spalten gesamt
+    if (a*capA + b*capB > 0){ structures.push([a,b]); if (b>0) structures.push([a, b-1]); }
+  }
+  let Cmax = 0;
+  for (const [a,b] of structures) Cmax = Math.max(Cmax, a*capA + b*capB);
+  if (Cmax <= 0) return null;
+
+  const packRoll = (m) => {
+    let best = null;
+    for (const [a,b] of structures){
+      if (a*capA + b*capB < m) continue;
+      const cols = [];
+      let x = 0, ci = 0;
+      const push = (cross, len, cap) => {
+        if (ci === 3) x += GAP_34;                        // Pflichtspalt zwischen Schnitt 3 und 4
+        cols.push({ x, cross, len, cap, n:0 }); x += cross + buffer; ci++;
+      };
+      for (let i=0;i<a;i++) push(d1, d2, capA);
+      for (let i=0;i<b;i++) push(d2, d1, capB);
+      const rightEdge = Math.max(0, ...cols.map(c => c.x + c.cross));
+      if (rightEdge > W + 1e-6) continue;                 // mit Zusatzspalt zu breit -> verwerfen
+      let ok = true;
+      for (let k=0;k<m;k++){                              // least-loaded -> Höhe balancieren
+        let pick = null;
+        for (const c of cols){ if (c.n >= c.cap) continue; const h = c.n*(c.len+buffer);
+          if (!pick || h < pick.h - 1e-9) pick = { c, h }; }
+        if (!pick){ ok = false; break; }
+        pick.c.n++;
+      }
+      if (!ok) continue;
+      const len = Math.max(0, ...cols.map(c => c.n>0 ? c.n*(c.len+buffer)-buffer : 0));
+      if (!best || len < best.len - 1e-9) best = { cols, len };
+    }
+    return best;
+  };
+
+  const N = rects.length;
+  const nRolls = Math.ceil(N / Cmax);
+  const rolls = [];
+  let idx = 0;
+  for (let r=0;r<nRolls;r++){
+    const m = Math.min(Cmax, N - idx);
+    const res = packRoll(m);
+    if (!res) return null;
+    const placed = [];
+    let p = 0;
+    for (const c of res.cols){
+      for (let j=0;j<c.n;j++){
+        const rect = rects[idx + p]; p++;
+        const rot = Math.abs(c.cross - rect.w) > 1e-6;
+        placed.push({ ...rect, px: c.x, py: j*(c.len+buffer), pw: c.cross, ph: c.len, rot });
+      }
+    }
+    idx += m;
+    rolls.push({ placed, usedLength: placed.reduce((mx,q)=>Math.max(mx, q.py+q.ph), 0) });
+  }
+  return { rolls, totalLength: rolls.reduce((s,r)=>s + r.usedLength, 0), nRolls: rolls.length };
+}
+
+// Reihen-Packung: höchstens MAX_ACROSS Teile je Reihe -> erfüllt die Maschinen-Grenze immer.
+// Dient als zulässiger Rückfall, wenn Guillotine mehr als MAX_ACROSS nebeneinander legen würde.
+function shelfPack(rects, W, Lmax, buffer){
+  const items = [...rects].sort((a,b)=> b.l - a.l);
+  const bins = [];
+  let b = null, shY = 0, shH = 0, shX = 0, shN = 0;
+  const open = () => { b = { placed:[] }; bins.push(b); shY = 0; shH = 0; shX = 0; shN = 0; };
+  open();
+  for (const it of items){
+    let opts = [{ w:it.w, l:it.l, rot:false }, { w:it.l, l:it.w, rot:true }].filter(o => o.w <= W + 1e-6);
+    if (!opts.length) opts = [{ w:it.w, l:it.l, rot:false }];
+    // In aktuelle Reihe einfügen?
+    const extra = shN === 3 ? GAP_34 : 0;                 // Pflichtspalt vor dem 4. Schnitt
+    const fit = opts.filter(o => shN < MAX_ACROSS && shX + (shN>0?buffer:0) + extra + o.w <= W + 1e-6);
+    if (fit.length){
+      fit.sort((p,q)=> Math.abs(p.l-shH) - Math.abs(q.l-shH) || p.l - q.l);
+      const o = fit[0], px = shX + (shN>0?buffer:0) + extra;
+      if (shY + Math.max(shH, o.l) <= Lmax + 1e-6){
+        b.placed.push({ ...it, px, py: shY, pw:o.w, ph:o.l, rot:o.rot });
+        shX = px + o.w; shH = Math.max(shH, o.l); shN++; continue;
+      }
+    }
+    // Neue Reihe (ggf. neue Rolle)
+    shY += shH > 0 ? shH + buffer : 0; shX = 0; shH = 0; shN = 0;
+    opts.sort((p,q)=> p.l - q.l);
+    let o = opts[0];
+    if (shY + o.l > Lmax + 1e-6) open();
+    b.placed.push({ ...it, px:0, py: shY, pw:o.w, ph:o.l, rot:o.rot });
+    shX = o.w; shH = o.l; shN = 1;
+  }
+  const rolls = bins.map(bn => ({ placed: bn.placed, usedLength: bn.placed.reduce((m,p)=>Math.max(m, p.py+p.ph), 0) }))
+                    .filter(r => r.placed.length > 0);
+  return { rolls, totalLength: rolls.reduce((s,r)=>s + r.usedLength, 0), nRolls: rolls.length };
+}
+
+// Portfolio mehrerer Strategien – nur Layouts mit höchstens MAX_ACROSS Teilen nebeneinander;
+// gewertet nach Rollenzahl, dann Gesamtlänge.
 function bestPack(rects, W, buffer, Lmax){
   const CONFIGS = [
     { sort:"area",    choose:"BSSF", split:"SLAS" },
@@ -982,11 +1114,16 @@ function bestPack(rects, W, buffer, Lmax){
     { sort:"maxside", choose:"BAF",  split:"SLAS" },
   ];
   let best = null;
-  for (const cfg of CONFIGS){
-    const r = guillotinePack(rects, W, Lmax, buffer, cfg);
+  const add = (r, maxAc) => {
+    if (!r || !r.rolls.length) return;
+    if (!r.rolls.every(b => maxAcross(b.placed) <= maxAc)) return;
     const sc = r.nRolls * Lmax * 10 + r.totalLength;
     if (!best || sc < best.sc) best = { ...r, sc };
-  }
+  };
+  // Guillotine darf höchstens 3 nebeneinander (4er-Layouts brauchen den Pflichtspalt -> nur Spalten/Reihen).
+  for (const cfg of CONFIGS) add(guillotinePack(rects, W, Lmax, buffer, cfg), 3);
+  add(columnPack(rects, W, Lmax, buffer), MAX_ACROSS);   // baut Pflichtspalt selbst ein
+  add(shelfPack(rects, W, Lmax, buffer), MAX_ACROSS);    // garantiert zulässig -> best != null
   return best;
 }
 
