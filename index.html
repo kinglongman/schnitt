@@ -789,12 +789,18 @@ function mandatorySplit(l, w, W, Lmax, arbitrary, axis){
   // Teilt eine Strecke:
   //  - beliebig: volle Breite/Länge nehmen, Rest abtrennen (z. B. 1524 + 476)
   //  - Standard: mittig in gleiche Teile (z. B. 1000 + 1000)
+  //  Eine entstehende Naht darf nie schmaler als MIN_SEAM sein.
   const divide = (total, max) => {
     if (total <= max + 1e-6) return [total];
     if (arbitrary){
       const out = []; let rem = total;
       while (rem > max + 1e-6){ out.push(max); rem -= max; }
       out.push(rem);
+      // Letztes Stück zu schmal? -> mit dem vorherigen Vollstück gleichmäßig aufteilen.
+      if (out.length >= 2 && out[out.length-1] < MIN_SEAM - 1e-6){
+        const last = out.pop(), prev = out.pop();
+        out.push((last + prev) / 2, (last + prev) / 2);
+      }
       return out;
     }
     const n = Math.ceil(total / max);
@@ -975,6 +981,8 @@ function shrinkBin(placed, W, buffer){
 const MAX_ACROSS = 4;
 // Pflicht-Zusatzspalt zwischen dem 3. und 4. Schnitt, wenn 4 nebeneinander liegen (mm).
 const GAP_34 = 3;
+// Mindestbreite/-höhe eines Teilstücks, wenn eine Naht (Split) entsteht (mm).
+const MIN_SEAM = 200;
 
 // Größte Anzahl Teile, die irgendwo über die Breite gleichzeitig nebeneinander liegen.
 function maxAcross(placed){
@@ -1275,7 +1283,7 @@ function applyVoluntarySplits(rects, minSavePct, packFn){
       seenType.add(it.typeIdx);
       const longSide = Math.max(it.l, it.w);
       const half = longSide / 2;
-      if (half < 50) continue;
+      if (half < MIN_SEAM) continue;                  // keine Naht schmaler als MIN_SEAM
       const a = (it.l >= it.w) ? { l: half, w: it.w } : { l: it.l, w: half };
       const cand = current.slice();
       const p1 = { ...it, key: it.key+"-a", l:a.l, w:a.w, volSplit:true, group:(it.group||it.key)+"-v" };
