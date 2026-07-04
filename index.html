@@ -1442,11 +1442,13 @@ function parseFilmWorkbook(buf){
     }
     if (!widths.length) continue;
     const len = Number(row[15]);                   // Spalte P = Rollenlänge
+    const price = Number(row[3]);                   // Spalte D = Preis je m²
     const eol = String(row[0] == null ? "" : row[0]).trim().toUpperCase() === "EOL";
     types.push({
       name, eol,
       widths: [...new Set(widths)].sort((a,b)=>a-b),
       length: Number.isFinite(len) && len > 0 ? Math.round(len) : 30480,
+      price: Number.isFinite(price) && price > 0 ? price : null,
     });
   }
   FILM_TYPES = types;
@@ -1710,7 +1712,9 @@ $("#calc").onclick = ()=>{
 
   const out = optimize(pieces, rollDef, buffer, allowSplit, minSavePct, splitDir);
   const projName = (document.getElementById("projName").value || "").trim();
-  lastResult = { projName, widths, length: rollDef.length, buffer, splitDir, allowSplit, minSavePct, pieces, out };
+  lastResult = { projName, widths, length: rollDef.length, buffer, splitDir, allowSplit, minSavePct, pieces, out,
+    filmType: selectedFilmType ? selectedFilmType.name : "",
+    pricePerSqm: selectedFilmType && selectedFilmType.price ? selectedFilmType.price : null };
   res.innerHTML = renderResults(out);
   res.scrollIntoView({behavior:"smooth", block:"start"});
 };
@@ -1735,15 +1739,18 @@ function renderResults(out){
   </div>`;
 
   // Statistik
-  const utilCls = utilPct>=85 ? "good" : (utilPct<65 ? "warn":"");
-  const usedWidthsTxt = out.widthsUsed.map(w=>fmt(w)).join(" + ") + " mm";
+  const usedWidthsTxt = out.widthsUsed.map(w=>mLabel(w)).join(" · ");
+  const folienQm = out.consumedArea/1e6;
+  const price = selectedFilmType && selectedFilmType.price ? selectedFilmType.price : null;
+  const kostenTxt = price != null
+    ? (folienQm * price).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2}) + " €"
+    : "–";
   html += `<div class="stats">
-    <div class="stat"><div class="k">Benötigte Rollen</div><div class="v">${out.rolls.length}</div></div>
-    <div class="stat"><div class="k">Genutzte Breiten</div><div class="v" style="font-size:16px">${usedWidthsTxt}</div></div>
-    <div class="stat ${utilCls}"><div class="k">Materialausnutzung</div><div class="v">${utilPct.toFixed(1)}<small> %</small></div></div>
+    <div class="stat"><div class="k">Genutzte Rollenbreiten</div><div class="v" style="font-size:16px">${usedWidthsTxt}</div></div>
+    <div class="stat"><div class="k">Anzahl Fenster</div><div class="v">${out.pieceCount}</div></div>
     <div class="stat"><div class="k">Verschnitt</div><div class="v">${wastePct.toFixed(1)}<small> %</small></div></div>
-    <div class="stat"><div class="k">Materialfläche gesamt</div><div class="v">${(out.consumedArea/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})}<small> m²</small></div></div>
-    <div class="stat"><div class="k">Teile platziert</div><div class="v">${out.pieceCount}</div></div>
+    <div class="stat"><div class="k">Folienfläche gesamt</div><div class="v">${folienQm.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})}<small> m²</small></div></div>
+    <div class="stat"><div class="k">Kosten Folie</div><div class="v">${kostenTxt}</div></div>
   </div>`;
 
   // Verbrauch je Rollenbreite (nicht-letzte Rollen voll gezählt)
@@ -1943,13 +1950,16 @@ function buildPdf(jsPDF, L){
   /* ---------- Ergebnis ---------- */
   const o = L.out;
   sectionTitle("Ergebnis");
+  const folienQm = o.consumedArea/1e6;
+  const kostenTxt = L.pricePerSqm != null
+    ? (folienQm * L.pricePerSqm).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2}) + " EUR"
+    : "–";
   const stats = [
-    ["Benötigte Rollen", String(o.rolls.length)],
-    ["Materialfläche gesamt", `${(o.consumedArea/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})} qm`],
-    ["Materialausnutzung", `${(o.util*100).toFixed(1)} %`],
+    ["Genutzte Rollenbreiten", o.widthsUsed.map(w=>fmt(w)).join(" · ") + " mm"],
+    ["Anzahl Fenster", String(o.pieceCount)],
     ["Verschnitt", `${(100-o.util*100).toFixed(1)} %`],
-    ["Rest auf letzter Rolle", `${fmtM(o.lastTail)} m`],
-    ["Teile platziert", String(o.pieceCount)],
+    ["Folienfläche gesamt", `${folienQm.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})} qm`],
+    ["Kosten Folie", kostenTxt],
   ];
   // 3 Spalten Kennzahlen
   const colW = cw/3;
