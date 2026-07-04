@@ -1457,7 +1457,7 @@ function populateFilmDropdown(){
   const sel = $("#folientyp");
   if (!FILM_TYPES.length){ setFolStatus("Keine Folientypen in der Datei gefunden.", "err"); return; }
   sel.innerHTML = `<option value="">— Folientyp wählen —</option>` +
-    FILM_TYPES.map((t,i)=>`<option value="${i}">${t.name}${t.eol ? " (EOL)" : ""}</option>`).join("");
+    FILM_TYPES.map((t,i)=>`<option value="${i}">${t.name}</option>`).join("");
   sel.onchange = ()=>{
     const idx = sel.value === "" ? -1 : parseInt(sel.value, 10);
     selectFilmType(idx >= 0 ? FILM_TYPES[idx] : null);
@@ -1472,7 +1472,7 @@ function selectFilmType(t){
   selectedFilmType = t;
   if (!t){ currentRolls = []; selectedRolls = new Set(); renderRolls(); return; }
   currentRolls = t.widths.map(w=>({ id:"w"+w, label: mLabel(w), width:w, length: t.length }));
-  selectedRolls = new Set(currentRolls.map(r=>r.id));   // alle Breiten des Typs vorausgewählt
+  selectedRolls = new Set();                            // Benutzer wählt die Breiten selbst
   renderRolls();
 }
 
