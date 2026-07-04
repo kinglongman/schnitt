@@ -514,16 +514,19 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   .field{margin-top:20px;}
   label.flbl{display:block;font-size:12.5px;font-weight:600;color:var(--muted);
     letter-spacing:.02em;margin-bottom:7px;text-transform:uppercase;}
-  input[type=text],input[type=number]{
+  input[type=text],input[type=number],select.fld{
     font-family:var(--mono);font-size:15px;color:var(--ink);background:var(--surface);
     border:1.5px solid var(--line-strong);border-radius:9px;padding:10px 12px;width:100%;
     transition:.12s;
   }
+  select.fld{cursor:pointer;appearance:none;-webkit-appearance:none;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.6'/></svg>");
+    background-repeat:no-repeat;background-position:right 12px center;padding-right:32px;}
   input[type=number]{-moz-appearance:textfield;}
   input[type=number]::-webkit-outer-spin-button,
   input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
   input::placeholder{color:var(--faint);font-family:var(--mono);}
-  input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+  input:focus,select.fld:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
   .buffer-row{display:flex;align-items:flex-end;gap:14px;}
   .buffer-row .field{margin-top:0;max-width:200px;}
   .buffer-note{font-size:13px;color:var(--muted);padding-bottom:10px;}
@@ -692,6 +695,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       <label class="flbl" for="projName">Projektname</label>
       <input type="text" id="projName" placeholder="wird für den PDF-Dateinamen verwendet (Verschnittplan_…)">
     </div>
+    <div class="field">
+      <label class="flbl" for="folientyp">Folientyp</label>
+      <select id="folientyp" class="fld"><option value="">— wird geladen …</option></select>
+      <div class="buffer-note" id="folStatus" style="padding-bottom:0;margin-top:7px;">Auswahl aus der Datei „Auswahl_Folientyp.xlsx". Nach der Auswahl erscheinen die verfügbaren Rollenbreiten.</div>
+    </div>
     <div class="rolls" id="rolls"></div>
     <div class="buffer-note" style="padding-bottom:0;margin-top:10px;">Mehrere Breiten anklickbar – der Optimierer wählt automatisch die beste Kombination (bei Bedarf auch gemischt), um den Verschnitt zu minimieren.</div>
     <div class="field buffer-row">
@@ -700,11 +708,6 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         <input type="number" id="buffer" min="0" step="1" placeholder="0" value="0">
       </div>
       <div class="buffer-note">Schnittfuge / Sicherheitsabstand, der zwischen je zwei Teilen frei bleibt.</div>
-    </div>
-    <div class="field">
-      <label class="flbl" for="produkt">Produkt</label>
-      <input type="text" id="produkt" placeholder="Produktname für den Excel-Import">
-      <div class="buffer-note" style="padding-bottom:0;margin-top:7px;">Legt fest, welche Zeilen beim Excel-Import (Schritt 2) übernommen werden – nur Einträge mit genau diesem Produkt.</div>
     </div>
   </section>
 
@@ -718,7 +721,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         <span class="upload-name" id="xlsName">keine Datei</span>
         <button type="button" class="upload-apply" id="xlsApply" disabled>Übernehmen</button>
       </div>
-      <div class="upload-status" id="xlsStatus">Optional: Excel mit den Tabellen „Seite 2“–„Seite 5“ laden. Übernommen werden alle Zeilen mit dem in Schritt 1 angegebenen Produkt.</div>
+      <div class="upload-status" id="xlsStatus">Optional: Excel mit den Tabellen „Seite 2"–„Seite 5" laden. Übernommen werden alle Zeilen mit dem in Schritt 1 gewählten Folientyp.</div>
     </div>
     <div class="cuts-grid" id="cutsGrid"></div>
     <button class="add-cut" id="addCut">+ Schnitt hinzufügen</button>
@@ -1372,6 +1375,9 @@ const fmtM = mm => (mm/1000).toLocaleString("de-DE",{minimumFractionDigits:2,max
 /* =========================================================================
    UI / STATE
    ========================================================================= */
+let FILM_TYPES = [];
+let selectedFilmType = null;
+let currentRolls = ROLLS.slice();          // aktuell wählbare Rollenbreiten (aus dem Folientyp)
 let selectedRolls = new Set([ROLLS[1].id]);
 let cuts = [];
 let cutSeq = 0;
@@ -1380,7 +1386,11 @@ const $ = s => document.querySelector(s);
 
 function renderRolls(){
   const c = $("#rolls"); c.innerHTML = "";
-  ROLLS.forEach(r=>{
+  if (!currentRolls.length){
+    c.innerHTML = `<div class="buffer-note" style="padding:0;">Bitte zuerst oben einen Folientyp wählen.</div>`;
+    return;
+  }
+  currentRolls.forEach(r=>{
     const b = document.createElement("button");
     b.className = "roll"; b.type="button";
     b.setAttribute("aria-pressed", selectedRolls.has(r.id) ? "true":"false");
@@ -1395,6 +1405,75 @@ function renderRolls(){
     };
     c.appendChild(b);
   });
+}
+
+/* ---- Folientypen aus externer Excel-Datei laden ---- */
+const mLabel = mm => (mm/1000).toLocaleString("de-DE",{minimumFractionDigits:0,maximumFractionDigits:3}) + " m";
+
+function setFolStatus(msg, cls){
+  const el = $("#folStatus"); if (!el) return;
+  el.textContent = msg;
+  el.style.color = cls === "err" ? "var(--accent)" : "";
+}
+
+async function loadFilmTypes(){
+  try{
+    const resp = await fetch("Auswahl_Folientyp.xlsx?ts=" + Date.now(), { cache:"no-store" });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    parseFilmWorkbook(await resp.arrayBuffer());
+  }catch(e){
+    setFolStatus("Datei Auswahl_Folientyp.xlsx konnte nicht geladen werden – sie muss im selben Ordner wie die Seite liegen. (" + e.message + ")", "err");
+  }
+}
+
+function parseFilmWorkbook(buf){
+  const wb = window.XLSX.read(buf, { type:"array" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = window.XLSX.utils.sheet_to_json(ws, { header:1, raw:true, defval:null });
+  const types = [];
+  for (let i = 3; i < rows.length; i++){          // ab Zeile 4 (0-basiert 3)
+    const row = rows[i] || [];
+    const name = (row[1] == null ? "" : String(row[1])).trim();   // Spalte B
+    if (!name) continue;
+    const widths = [];
+    for (let c = 4; c <= 14; c++){                 // Spalten E–O = R1–R11
+      const v = Number(row[c]);
+      if (Number.isFinite(v) && v > 0) widths.push(Math.round(v));
+    }
+    if (!widths.length) continue;
+    const len = Number(row[15]);                   // Spalte P = Rollenlänge
+    const eol = String(row[0] == null ? "" : row[0]).trim().toUpperCase() === "EOL";
+    types.push({
+      name, eol,
+      widths: [...new Set(widths)].sort((a,b)=>a-b),
+      length: Number.isFinite(len) && len > 0 ? Math.round(len) : 30480,
+    });
+  }
+  FILM_TYPES = types;
+  populateFilmDropdown();
+}
+
+function populateFilmDropdown(){
+  const sel = $("#folientyp");
+  if (!FILM_TYPES.length){ setFolStatus("Keine Folientypen in der Datei gefunden.", "err"); return; }
+  sel.innerHTML = `<option value="">— Folientyp wählen —</option>` +
+    FILM_TYPES.map((t,i)=>`<option value="${i}">${t.name}${t.eol ? " (EOL)" : ""}</option>`).join("");
+  sel.onchange = ()=>{
+    const idx = sel.value === "" ? -1 : parseInt(sel.value, 10);
+    selectFilmType(idx >= 0 ? FILM_TYPES[idx] : null);
+  };
+  // Ersten Typ vorauswählen
+  selectFilmType(FILM_TYPES[0]);
+  sel.value = "0";
+  setFolStatus(FILM_TYPES.length + " Folientypen geladen. Nach der Auswahl die gewünschten Rollenbreiten anklicken.");
+}
+
+function selectFilmType(t){
+  selectedFilmType = t;
+  if (!t){ currentRolls = []; selectedRolls = new Set(); renderRolls(); return; }
+  currentRolls = t.widths.map(w=>({ id:"w"+w, label: mLabel(w), width:w, length: t.length }));
+  selectedRolls = new Set(currentRolls.map(r=>r.id));   // alle Breiten des Typs vorausgewählt
+  renderRolls();
 }
 
 function addCut(data){
@@ -1555,8 +1634,8 @@ function setXlsStatus(msg, kind){
 function applyExcel(){
   if (!window.XLSX){ setXlsStatus("Excel-Bibliothek konnte nicht geladen werden (Internet?).", "err"); return; }
   if (!lastWorkbook){ setXlsStatus("Bitte zuerst eine Excel-Datei wählen.", "err"); return; }
-  const product = ($("#produkt").value || "").trim();
-  if (!product){ setXlsStatus("Bitte zuerst in Schritt 1 das Produkt eingeben, dann „Übernehmen“ klicken.", "err"); return; }
+  const product = selectedFilmType ? selectedFilmType.name : "";
+  if (!product){ setXlsStatus("Bitte zuerst in Schritt 1 einen Folientyp wählen, dann Übernehmen klicken.", "err"); return; }
 
   const res = xImport(window.XLSX, lastWorkbook, product);
   if (res.sheetsFound.length === 0){
@@ -1603,8 +1682,10 @@ $("#xlsApply").onclick = applyExcel;
    KALKULATION + RENDERING DER ERGEBNISSE
    ========================================================================= */
 $("#calc").onclick = ()=>{
-  const widths = ROLLS.filter(r=>selectedRolls.has(r.id)).map(r=>r.width).sort((a,b)=>a-b);
-  const rollDef = { widths, length: ROLLS[0].length };
+  const chosen = currentRolls.filter(r=>selectedRolls.has(r.id));
+  const widths = chosen.map(r=>r.width).sort((a,b)=>a-b);
+  if (!widths.length){ alert("Bitte in Schritt 1 einen Folientyp und mindestens eine Rollenbreite wählen."); return; }
+  const rollDef = { widths, length: chosen[0].length };
   const buffer = Math.max(0, parseFloat($("#buffer").value) || 0);
   const allowSplit = $("#allowSplit").checked;
   const minSavePct = allowSplit ? (parseFloat($("#minSave").value)||0) : 0;
@@ -2051,6 +2132,7 @@ function buildPdf(jsPDF, L){
 
 /* ---- Init ---- */
 renderRolls();
+loadFilmTypes();
 addCut();
 </script>
 </body>
