@@ -918,10 +918,15 @@ function guillotinePack(rects, W, Lmax, buffer, opts){
   newBin();
 
   for (const it of items){
-    const cands = [
+    let cands = [
       { fw: it.w+buffer, fh: it.l+buffer, rot:false, rw: it.w, rh: it.l },
       { fw: it.l+buffer, fh: it.w+buffer, rot:true,  rw: it.l, rh: it.w },
-    ];
+    ].filter(c => c.rw <= W + 1e-6);
+    if (opts.orient === "across" && cands.length > 1){
+      // Orientierung mit geringster Länge pro Teil (berücksichtigt, wie viele nebeneinander passen)
+      const eff = c => c.rh / Math.max(1, Math.floor((W + buffer) / (c.rw + buffer)));
+      cands = [ cands.reduce((a,b)=> eff(b) < eff(a) - 1e-9 ? b : a) ];
+    }
     let best = null;
     for (const bin of bins) for (let fi = 0; fi < bin.free.length; fi++){
       const fr = bin.free[fi];
@@ -1123,13 +1128,21 @@ function bestPack(rects, W, buffer, Lmax){
     { sort:"maxside", choose:"BSSF", split:"SAS"  },
     { sort:"area",    choose:"BSSF", split:"SAS"  },
     { sort:"maxside", choose:"BAF",  split:"SLAS" },
+    { sort:"area",    choose:"BSSF", split:"SLAS", orient:"across" },
+    { sort:"maxside", choose:"BSSF", split:"SLAS", orient:"across" },
+    { sort:"maxside", choose:"BSSF", split:"SAS",  orient:"across" },
   ];
   let best = null;
+  // Bewertung = abgerechnete Länge: alle Rollen außer der letzten zählen voll (Lmax).
+  const billed = r => {
+    const lens = r.rolls.map(x=>x.usedLength).sort((a,b)=>b-a);
+    return lens.length ? Lmax*(lens.length-1) + lens[lens.length-1] : 0;
+  };
   const add = (r, maxAc) => {
     if (!r || !r.rolls.length) return;
     if (!r.rolls.every(b => maxAcross(b.placed) <= maxAc)) return;
-    const sc = r.nRolls * Lmax * 10 + r.totalLength;
-    if (!best || sc < best.sc) best = { ...r, sc };
+    const sc = billed(r);
+    if (!best || sc < best.sc - 1e-6) best = { ...r, sc };
   };
   // Guillotine darf höchstens 3 nebeneinander (4er-Layouts brauchen den Pflichtspalt -> nur Spalten/Reihen).
   for (const cfg of CONFIGS) add(guillotinePack(rects, W, Lmax, buffer, cfg), 3);
@@ -1142,7 +1155,14 @@ function bestPack(rects, W, buffer, Lmax){
 // gewertet nach Materialfläche (Breite × Länge).
 function packMulti(rects, widths, Lmax, buffer){
   const ws = [...new Set(widths)].sort((a,b)=>a-b);
-  const areaOf = rolls => rolls.reduce((s,r)=> s + r.W*r.usedLength, 0);
+  // Abgerechnete Fläche: je Breite zählen alle Rollen außer der letzten voll (Lmax).
+  const areaOf = rolls => {
+    const byW = new Map();
+    for (const r of rolls){ if (!byW.has(r.W)) byW.set(r.W, []); byW.get(r.W).push(r.usedLength); }
+    let a = 0;
+    for (const [W, lens] of byW){ lens.sort((x,y)=>y-x); a += W*(Lmax*(lens.length-1) + lens[lens.length-1]); }
+    return a;
+  };
   const rotOf  = rolls => rolls.reduce((s,r)=> s + r.placed.filter(p=>p.rot).length, 0);
   const fitsW = (r,W) => Math.min(r.l,r.w) <= W+1e-6;
 
