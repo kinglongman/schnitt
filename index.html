@@ -1955,6 +1955,7 @@ function buildPdf(jsPDF, L){
 
   /* ---------- Eingabedaten ---------- */
   sectionTitle("Eingabedaten");
+  if (L.filmType) kv("Folientyp", L.filmType);
   kv("Zugel. Breiten", `${L.widths.map(w=>fmt(w)).join(" / ")} mm  ·  Länge ${fmt(L.length)} mm`);
   kv("Puffer", `${fmt(L.buffer)} mm`);
   kv("Splitrichtung", `${L.splitDir} (Übergröße ${L.splitDir==="horizontal" ? "über die Höhe" : "über die Breite"})`);
