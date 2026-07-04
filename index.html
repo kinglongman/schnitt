@@ -1775,16 +1775,19 @@ function renderResults(out){
 
   // Verbrauch je Rollenbreite (nicht-letzte Rollen voll gezählt)
   const qm = mm2 => (mm2/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const totFull = out.perWidth.reduce((s,w)=>s + (w.rolls-1), 0);
+  const totLfm  = out.perWidth.reduce((s,w)=>s + w.partial, 0);
   html += `<div class="roll-out"><h3>Verbrauch je Rollenbreite</h3>
     <table class="plan">
-      <thead><tr><th>Breite</th><th>Rollen</th><th>Verbrauchte Länge</th><th>Materialfläche</th></tr></thead>
+      <thead><tr><th>Breite</th><th>Ganze Rollen</th><th>Laufmeter</th><th>Verbrauchte Länge</th><th>Folienfläche</th></tr></thead>
       <tbody>${out.perWidth.map(w=>`<tr>
         <td>${fmt(w.W)} mm</td>
-        <td class="num">${w.rolls}</td>
+        <td class="num">${w.rolls-1}</td>
+        <td class="num">${fmtM(w.partial)} m</td>
         <td class="num">${fmtM(w.billedLength)} m</td>
         <td class="num">${qm(w.area)} m²</td>
       </tr>`).join("")}
-      <tr class="sumrow"><td><strong>Gesamt</strong></td><td class="num"><strong>${out.rolls.length}</strong></td><td class="num"><strong>${fmtM(out.totalUsed)} m</strong></td><td class="num"><strong>${qm(out.consumedArea)} m²</strong></td></tr>
+      <tr class="sumrow"><td><strong>Gesamt</strong></td><td class="num"><strong>${totFull}</strong></td><td class="num"><strong>${fmtM(totLfm)} m</strong></td><td class="num"><strong>${fmtM(out.totalUsed)} m</strong></td><td class="num"><strong>${qm(out.consumedArea)} m²</strong></td></tr>
       </tbody>
     </table></div>`;
 
@@ -1971,15 +1974,11 @@ function buildPdf(jsPDF, L){
   const o = L.out;
   sectionTitle("Ergebnis");
   const folienQm = o.consumedArea/1e6;
-  const kostenTxt = L.pricePerSqm != null
-    ? (folienQm * L.pricePerSqm).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2}) + " EUR"
-    : "–";
   const stats = [
     ["Genutzte Rollenbreiten", o.widthsUsed.map(w=>fmt(w)).join(" · ") + " mm"],
     ["Anzahl Fenster", String(o.pieceCount)],
     ["Verschnitt", `${(100-o.util*100).toFixed(1)} %`],
     ["Folienfläche gesamt", `${folienQm.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})} qm`],
-    ["Kosten Folie", kostenTxt],
   ];
   // 3 Spalten Kennzahlen
   const colW = cw/3;
@@ -1999,15 +1998,17 @@ function buildPdf(jsPDF, L){
   // Verbrauch je Rollenbreite (nicht-letzte Rollen voll gezählt)
   {
     const qm = mm2 => (mm2/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
-    const fracs = [0.28,0.16,0.30,0.26];
+    const fracs = [0.20,0.18,0.18,0.22,0.22];
+    const totFull = o.perWidth.reduce((s,w)=>s + (w.rolls-1), 0);
+    const totLfm  = o.perWidth.reduce((s,w)=>s + w.partial, 0);
     ensure(8);
     doc.setFont("helvetica","bold"); doc.setFontSize(9.5); setText(INK);
     doc.text("Verbrauch je Rollenbreite", M, y); y+=4;
     tableBlock(
-      ["Breite (mm)","Rollen","Verbrauchte Länge","Materialfläche (qm)"],
+      ["Breite (mm)","Ganze Rollen","Laufmeter","Verbrauchte Länge","Folienfläche (qm)"],
       fracs,
-      o.perWidth.map(w => [ fmt(w.W), String(w.rolls), `${fmtM(w.billedLength)} m`, qm(w.area) ]),
-      [true,true,true,true]
+      o.perWidth.map(w => [ fmt(w.W), String(w.rolls-1), `${fmtM(w.partial)} m`, `${fmtM(w.billedLength)} m`, qm(w.area) ]),
+      [true,true,true,true,true]
     );
     // Gesamtsumme
     ensure(7);
@@ -2016,9 +2017,10 @@ function buildPdf(jsPDF, L){
     doc.setFont("helvetica","bold"); doc.setFontSize(8.5); setText(INK);
     doc.text("Gesamt", xs[0], y);
     doc.setFont("courier","bold");
-    doc.text(String(o.rolls.length), xs[1], y);
-    doc.text(`${fmtM(o.totalUsed)} m`, xs[2], y);
-    doc.text(qm(o.consumedArea), xs[3], y);
+    doc.text(String(totFull), xs[1], y);
+    doc.text(`${fmtM(totLfm)} m`, xs[2], y);
+    doc.text(`${fmtM(o.totalUsed)} m`, xs[3], y);
+    doc.text(qm(o.consumedArea), xs[4], y);
     y+=6;
   }
 
