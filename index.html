@@ -1957,17 +1957,27 @@ function buildPdf(jsPDF, L){
   sectionTitle("Eingabedaten");
   if (L.filmType) kv("Folientyp", L.filmType);
   kv("Zugel. Breiten", `${L.widths.map(w=>fmt(w)).join(" / ")} mm  ·  Länge ${fmt(L.length)} mm`);
-  kv("Puffer", `${fmt(L.buffer)} mm`);
+  const has4 = L.out.rolls.some(r => maxAcross(r.placed) >= MAX_ACROSS);
+  if (L.buffer > 0 && has4)  kv("Puffer", `${fmt(L.buffer)} mm · zusätzlich ${GAP_34} mm zwischen Schnitt 3 und 4`);
+  else if (L.buffer > 0)     kv("Puffer", `${fmt(L.buffer)} mm`);
+  else if (has4)             kv("Puffer", `${GAP_34} mm zwischen Schnitt 3 und 4`);
   kv("Splitrichtung", `${L.splitDir} (Übergröße ${L.splitDir==="horizontal" ? "über die Höhe" : "über die Breite"})`);
-  kv("Freiwillige Splits", L.allowSplit ? `erlaubt (Mindest-Ersparnis ${fmt(L.minSavePct)} %)` : "aus");
+  if (L.allowSplit) kv("Freiwillige Splits", `erlaubt (Mindest-Ersparnis ${fmt(L.minSavePct)} %)`);
   y+=2;
 
   // Schnitt-Liste
+  const maxW = Math.max(...L.widths);
+  const isSplit = p => {
+    const minD = Math.min(p.width, p.length), maxD = Math.max(p.width, p.length);
+    return !(minD <= maxW + 1e-6 && maxD <= L.length + 1e-6);
+  };
+  const nahtTxt = p => isSplit(p) ? `${p.arb ? "beliebig" : "gleichmäßig"} ${L.splitDir}` : "";
   tableBlock(
-    ["Name","Anzahl","Breite (mm)","Höhe (mm)","Teilung"],
-    [0.34,0.13,0.18,0.18,0.17],
-    L.pieces.map(p => [ p.name || "Schnitt", fmt(p.qty||1), fmt(p.width), fmt(p.length), p.arb ? "beliebig" : "mittig" ]),
-    [false,true,true,true,false]
+    ["Name","Anzahl","Breite (mm)","Höhe (mm)","Naht"],
+    [0.30,0.12,0.16,0.16,0.26],
+    L.pieces.map(p => [ p.name || "Schnitt", fmt(p.qty||1), fmt(p.width), fmt(p.length), nahtTxt(p) ]),
+    [false,true,true,true,false],
+    ["l","r","r","r","l"]
   );
   y+=4;
 
@@ -2071,12 +2081,17 @@ function buildPdf(jsPDF, L){
   return doc;
 
   /* ===================== Helfer ===================== */
-  function tableBlock(headers, fracs, rows, numeric){
+  function tableBlock(headers, fracs, rows, numeric, align){
+    align = align || headers.map(()=> "l");
     const xs = []; let acc=M;
     fracs.forEach(f=>{ xs.push(acc); acc += f*cw; });
+    const put = (txt, i) => {
+      if (align[i] === "r") doc.text(txt, xs[i] + fracs[i]*cw - 2, y, { align:"right" });
+      else doc.text(txt, xs[i], y);
+    };
     const drawHeader = ()=>{
       doc.setFont("helvetica","bold"); doc.setFontSize(7.5); setText(FAINT);
-      headers.forEach((h,i)=> doc.text(h.toUpperCase(), xs[i], y));
+      headers.forEach((h,i)=> put(h.toUpperCase(), i));
       y+=1.5; setDraw(LINE); doc.setLineWidth(0.3); doc.line(M,y,PW-M,y); y+=3.5;
     };
     ensure(10); drawHeader();
@@ -2087,7 +2102,7 @@ function buildPdf(jsPDF, L){
       const hgt = Math.max(...cells.map(c=>c.length))*4.0 + 1.2;
       if (y+hgt > bottom){ doc.addPage(); y=M; drawHeader(); doc.setFont("helvetica","normal"); doc.setFontSize(8.5); }
       setText(INK);
-      cells.forEach((c,i)=>{ doc.setFont(numeric[i]?"courier":"helvetica","normal"); doc.text(c, xs[i], y); });
+      cells.forEach((c,i)=>{ doc.setFont(numeric[i]?"courier":"helvetica","normal"); put(c, i); });
       y+=hgt;
       setDraw([235,237,233]); doc.setLineWidth(0.2); doc.line(M,y-2.2,PW-M,y-2.2);
     });
