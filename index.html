@@ -1991,20 +1991,23 @@ function buildPdf(jsPDF, L){
     ["Verschnitt", `${(100-o.util*100).toFixed(1)} %`],
     ["Folienfläche gesamt", `${folienQm.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})} qm`],
   ];
-  // 3 Spalten Kennzahlen
-  const colW = cw/3;
-  for (let i=0;i<stats.length;i+=3){
-    ensure(13);
-    for (let j=0;j<3 && i+j<stats.length;j++){
-      const x = M + j*colW;
-      doc.setFont("helvetica","normal"); doc.setFontSize(8); setText(FAINT);
-      doc.text(stats[i+j][0].toUpperCase(), x, y);
-      doc.setFont("helvetica","bold"); doc.setFontSize(13); setText(INK);
-      doc.text(stats[i+j][1], x, y+6);
-    }
-    y+=13;
-  }
-  y+=2;
+  // 4 Kennzahlen in einer Reihe (variable Spaltenbreiten, damit alles passt)
+  const stx = [0, 0.30, 0.50, 0.66].map(f => M + f*cw);
+  const stRight = [stx[1], stx[2], stx[3], M + cw];
+  ensure(13);
+  stats.forEach((s,i)=>{
+    const x = stx[i], maxW = stRight[i] - x - 2;
+    const label = s[0].toUpperCase();
+    doc.setFont("helvetica","normal"); setText(FAINT);
+    let lf = 8; doc.setFontSize(lf);
+    while (doc.getTextWidth(label) > maxW && lf > 6){ lf -= 0.5; doc.setFontSize(lf); }
+    doc.text(label, x, y);
+    doc.setFont("helvetica","bold"); setText(INK);
+    let vf = 12; doc.setFontSize(vf);
+    while (doc.getTextWidth(s[1]) > maxW && vf > 7){ vf -= 0.5; doc.setFontSize(vf); }
+    doc.text(s[1], x, y+6);
+  });
+  y += 15;
 
   // Verbrauch je Rollenbreite (nicht-letzte Rollen voll gezählt)
   {
