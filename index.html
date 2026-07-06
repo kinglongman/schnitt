@@ -2022,19 +2022,21 @@ function buildPdf(jsPDF, L){
       ["Breite (mm)","Ganze Rollen","Laufmeter","Verbrauchte Länge","Folienfläche (qm)"],
       fracs,
       o.perWidth.map(w => [ fmt(w.W), String(w.rolls-1), `${fmtM(w.partial)} m`, `${fmtM(w.billedLength)} m`, qm(w.area) ]),
-      [true,true,true,true,true]
+      [true,true,true,true,true],
+      ["l","r","r","r","r"]
     );
     // Gesamtsumme
     ensure(7);
     const xs=[]; let acc=M; fracs.forEach(f=>{ xs.push(acc); acc+=f*cw; });
+    const rX = i => xs[i] + fracs[i]*cw - 2;               // rechte Kante der Spalte
     setDraw(LINE); doc.setLineWidth(0.4); doc.line(M, y-1, PW-M, y-1); y+=2.5;
     doc.setFont("helvetica","bold"); doc.setFontSize(8.5); setText(INK);
     doc.text("Gesamt", xs[0], y);
     doc.setFont("courier","bold");
-    doc.text(String(totFull), xs[1], y);
-    doc.text(`${fmtM(totLfm)} m`, xs[2], y);
-    doc.text(`${fmtM(o.totalUsed)} m`, xs[3], y);
-    doc.text(qm(o.consumedArea), xs[4], y);
+    doc.text(String(totFull), rX(1), y, { align:"right" });
+    doc.text(`${fmtM(totLfm)} m`, rX(2), y, { align:"right" });
+    doc.text(`${fmtM(o.totalUsed)} m`, rX(3), y, { align:"right" });
+    doc.text(qm(o.consumedArea), rX(4), y, { align:"right" });
     y+=6;
   }
 
