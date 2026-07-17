@@ -1083,6 +1083,81 @@ function columnPack(rects, W, Lmax, buffer){
   return { rolls, totalLength: rolls.reduce((s,r)=>s + r.usedLength, 0), nRolls: rolls.length };
 }
 
+// Spalten-Packung für GEMISCHTE Größen: baut senkrechte Spalten (gleiche Quer-Breite je Spalte)
+// und wählt Orientierung + Spalte je Teil so, dass die belegte Rollenlänge minimal bleibt.
+// Höchstens MAX_ACROSS Spalten (= nebeneinander); Pflichtspalt vor der 4. Spalte.
+function mixedColumnPack(rects, W, Lmax, buffer){
+  if (!rects.length) return null;
+  const items = [...rects].sort((a,b)=> Math.max(b.w,b.l)-Math.max(a.w,a.l) || (b.w*b.l)-(a.w*a.l));
+
+  const widthOf = cols => {                       // benötigte Breite inkl. Puffer + Pflichtspalt
+    let w = 0; cols.forEach((c,i)=>{ if (i===3) w += GAP_34; w += c.cw + buffer; });
+    return w;
+  };
+  const maxLen = cols => cols.reduce((m,c)=>Math.max(m, c.len), 0);
+
+  const place = (roll, it) => {
+    const oris = [{ pw:it.w, pl:it.l, rot:false }, { pw:it.l, pl:it.w, rot:true }]
+                 .filter(o => o.pw <= W + 1e-6 && o.pl <= Lmax + 1e-6);
+    let best = null;
+    for (const o of oris){
+      // in bestehende Spalte gleicher Breite
+      roll.cols.forEach((c, ci)=>{
+        if (Math.abs(c.cw - o.pw) > 1e-6) return;
+        const nl = c.len + buffer + o.pl;
+        if (nl > Lmax + 1e-6) return;
+        const mh = Math.max(nl, ...roll.cols.filter((_,k)=>k!==ci).map(x=>x.len), 0);
+        const cand = { mh, add:ci, o, extraW:0 };
+        if (!best || cand.mh < best.mh - 1e-6 || (Math.abs(cand.mh-best.mh)<1e-6 && best.add<0)) best = cand;
+      });
+      // neue Spalte
+      if (roll.cols.length < MAX_ACROSS){
+        const test = [...roll.cols, { cw:o.pw, len:o.pl }];
+        if (widthOf(test) <= W + buffer + 1e-6){
+          const mh = Math.max(o.pl, maxLen(roll.cols));
+          const cand = { mh, add:-1, o, extraW:o.pw };
+          // bei Gleichstand: lieber in bestehende Spalte (add>=0) als neue eröffnen
+          if (!best || cand.mh < best.mh - 1e-6) best = cand;
+        }
+      }
+    }
+    if (!best) return false;
+    if (best.add >= 0){
+      const c = roll.cols[best.add];
+      c.items.push({ rect: it, rot: best.o.rot, pw: best.o.pw, pl: best.o.pl, y: c.len + buffer });
+      c.len = c.len + buffer + best.o.pl;
+    } else {
+      roll.cols.push({ cw: best.o.pw, len: best.o.pl, items: [{ rect: it, rot: best.o.rot, pw: best.o.pw, pl: best.o.pl, y: 0 }] });
+    }
+    return true;
+  };
+
+  const rolls = [];
+  let cur = { cols: [] };
+  for (const it of items){
+    if (!place(cur, it)){
+      if (cur.cols.length) rolls.push(cur);
+      cur = { cols: [] };
+      if (!place(cur, it)) return null;          // passt gar nicht -> aufgeben
+    }
+  }
+  if (cur.cols.length) rolls.push(cur);
+
+  const outRolls = rolls.map(roll=>{
+    const placed = [];
+    let x = 0;
+    roll.cols.forEach((c, ci)=>{
+      if (ci === 3) x += GAP_34;                  // Pflichtspalt vor der 4. Spalte
+      for (const p of c.items){
+        placed.push({ ...p.rect, px:x, py:p.y, pw:p.pw, ph:p.pl, rot:p.rot });
+      }
+      x += c.cw + buffer;
+    });
+    return { placed, usedLength: placed.reduce((m,q)=>Math.max(m, q.py+q.ph), 0) };
+  });
+  return { rolls: outRolls, totalLength: outRolls.reduce((s,r)=>s+r.usedLength,0), nRolls: outRolls.length };
+}
+
 // Reihen-Packung: höchstens MAX_ACROSS Teile je Reihe -> erfüllt die Maschinen-Grenze immer.
 // Dient als zulässiger Rückfall, wenn Guillotine mehr als MAX_ACROSS nebeneinander legen würde.
 function shelfPack(rects, W, Lmax, buffer){
@@ -1147,6 +1222,7 @@ function bestPack(rects, W, buffer, Lmax){
   // Guillotine darf höchstens 3 nebeneinander (4er-Layouts brauchen den Pflichtspalt -> nur Spalten/Reihen).
   for (const cfg of CONFIGS) add(guillotinePack(rects, W, Lmax, buffer, cfg), 3);
   add(columnPack(rects, W, Lmax, buffer), MAX_ACROSS);   // baut Pflichtspalt selbst ein
+  add(mixedColumnPack(rects, W, Lmax, buffer), MAX_ACROSS);
   add(shelfPack(rects, W, Lmax, buffer), MAX_ACROSS);    // garantiert zulässig -> best != null
   return best;
 }
