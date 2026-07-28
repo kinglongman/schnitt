@@ -2031,7 +2031,6 @@ function buildPdf(jsPDF, L){
   setDraw(INK); doc.setLineWidth(0.5); doc.line(M,y,PW-M,y); y+=8;
 
   /* ---------- Eingabedaten ---------- */
-  sectionTitle("Eingabedaten");
   if (L.projName) kv("Projektname", L.projName);
   if (L.filmType) kv("Folientyp", L.filmType);
   const has4 = L.out.rolls.some(r => maxAcross(r.placed) >= MAX_ACROSS);
@@ -2088,9 +2087,7 @@ function buildPdf(jsPDF, L){
     const fracs = [0.20,0.18,0.18,0.22,0.22];
     const totFull = o.perWidth.reduce((s,w)=>s + (w.rolls-1), 0);
     const totLfm  = o.perWidth.reduce((s,w)=>s + w.partial, 0);
-    ensure(8);
-    doc.setFont("helvetica","bold"); doc.setFontSize(9.5); setText(INK);
-    doc.text("Verbrauch je Rollenbreite", M, y); y+=4;
+    sectionTitle("Verbrauch je Rollenbreite");
     tableBlock(
       ["Breite (mm)","Ganze Rollen","Laufmeter","Verbrauchte Länge","Folienfläche (qm)"],
       fracs,
@@ -2134,9 +2131,7 @@ function buildPdf(jsPDF, L){
     const maxW = Math.max(...L.widths);
     const isSplit = p => { const a=Math.min(p.width,p.length), b=Math.max(p.width,p.length); return !(a<=maxW+1e-6 && b<=L.length+1e-6); };
     const nahtTxt = p => isSplit(p) ? `${p.arb ? "beliebig" : "gleichmäßig"} ${L.splitDir}` : "";
-    ensure(10);
-    doc.setFont("helvetica","bold"); doc.setFontSize(9.5); setText(INK);
-    doc.text("Aufmaßliste", M, y); y+=4;
+    sectionTitle("Aufmaßliste");
     tableBlock(
       ["Name","Anzahl","Breite (mm)","Höhe (mm)","Naht"],
       [0.30,0.12,0.16,0.16,0.26],
