@@ -1560,10 +1560,10 @@ function populateFilmDropdown(){
     const idx = sel.value === "" ? -1 : parseInt(sel.value, 10);
     selectFilmType(idx >= 0 ? FILM_TYPES[idx] : null);
   };
-  // Ersten Typ vorauswählen
-  selectFilmType(FILM_TYPES[0]);
-  sel.value = "0";
-  setFolStatus(FILM_TYPES.length + " Folientypen geladen. Nach der Auswahl die gewünschten Rollenbreiten anklicken.");
+  // Keine automatische Vorauswahl – Benutzer wählt den Folientyp selbst.
+  sel.value = "";
+  selectFilmType(null);
+  setFolStatus(FILM_TYPES.length + " Folientypen geladen. Bitte Folientyp wählen, dann die gewünschten Rollenbreiten anklicken.");
 }
 
 function selectFilmType(t){
