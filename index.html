@@ -2027,39 +2027,24 @@ function buildPdf(jsPDF, L){
 
   /* ---------- Titel ---------- */
   doc.setFont("helvetica","bold"); doc.setFontSize(18); setText(INK);
-  doc.text("Folien-Schnittoptimierung", M, y+4); y+=9.5;
-  doc.setFont("helvetica","normal"); doc.setFontSize(10); setText(MUT);
-  if (L.projName) doc.text(L.projName, M, y);
-  y+=3.5;
+  doc.text("Verschnittplan", M, y+4); y+=12;
   setDraw(INK); doc.setLineWidth(0.5); doc.line(M,y,PW-M,y); y+=8;
 
   /* ---------- Eingabedaten ---------- */
   sectionTitle("Eingabedaten");
+  if (L.projName) kv("Projektname", L.projName);
   if (L.filmType) kv("Folientyp", L.filmType);
-  kv("Zugel. Breiten", `${L.widths.map(w=>fmt(w)).join(" / ")} mm  ·  Länge ${fmt(L.length)} mm`);
   const has4 = L.out.rolls.some(r => maxAcross(r.placed) >= MAX_ACROSS);
   if (L.buffer > 0 && has4)  kv("Puffer", `${fmt(L.buffer)} mm · zusätzlich ${GAP_34} mm zwischen Schnitt 3 und 4`);
   else if (L.buffer > 0)     kv("Puffer", `${fmt(L.buffer)} mm`);
   else if (has4)             kv("Puffer", `${GAP_34} mm zwischen Schnitt 3 und 4`);
-  kv("Splitrichtung", `${L.splitDir} (Übergröße ${L.splitDir==="horizontal" ? "über die Höhe" : "über die Breite"})`);
+  {
+    const mW = Math.max(...L.widths);
+    const anySplit = L.pieces.some(p => { const a=Math.min(p.width,p.length), b=Math.max(p.width,p.length); return !(a<=mW+1e-6 && b<=L.length+1e-6); }) || (L.out.volSplitCount>0);
+    if (anySplit) kv("Splitrichtung", `${L.splitDir} (Übergröße ${L.splitDir==="horizontal" ? "über die Höhe" : "über die Breite"})`);
+  }
   if (L.allowSplit) kv("Freiwillige Splits", `erlaubt (Mindest-Ersparnis ${fmt(L.minSavePct)} %)`);
   y+=2;
-
-  // Schnitt-Liste
-  const maxW = Math.max(...L.widths);
-  const isSplit = p => {
-    const minD = Math.min(p.width, p.length), maxD = Math.max(p.width, p.length);
-    return !(minD <= maxW + 1e-6 && maxD <= L.length + 1e-6);
-  };
-  const nahtTxt = p => isSplit(p) ? `${p.arb ? "beliebig" : "gleichmäßig"} ${L.splitDir}` : "";
-  tableBlock(
-    ["Name","Anzahl","Breite (mm)","Höhe (mm)","Naht"],
-    [0.30,0.12,0.16,0.16,0.26],
-    L.pieces.map(p => [ p.name || "Schnitt", fmt(p.qty||1), fmt(p.width), fmt(p.length), nahtTxt(p) ]),
-    [false,true,true,true,false],
-    ["l","r","r","r","l"]
-  );
-  y+=4;
 
   /* ---------- Ergebnis ---------- */
   const o = L.out;
@@ -2076,6 +2061,15 @@ function buildPdf(jsPDF, L){
   const stx = [0, 0.27, 0.40, 0.53, 0.73].map(f => M + f*cw);
   const stRight = [stx[1], stx[2], stx[3], stx[4], M + cw];
   ensure(13);
+  // gemeinsame Wert-Schriftgröße, damit alle Kennzahlen gleich groß sind
+  doc.setFont("helvetica","bold");
+  let vf = 12;
+  stats.forEach((s,i)=>{
+    const maxW = stRight[i] - stx[i] - 2;
+    let f = 12; doc.setFontSize(f);
+    while (doc.getTextWidth(s[1]) > maxW && f > 7){ f -= 0.5; doc.setFontSize(f); }
+    vf = Math.min(vf, f);
+  });
   stats.forEach((s,i)=>{
     const x = stx[i], maxW = stRight[i] - x - 2;
     const label = s[0].toUpperCase();
@@ -2083,9 +2077,7 @@ function buildPdf(jsPDF, L){
     let lf = 8; doc.setFontSize(lf);
     while (doc.getTextWidth(label) > maxW && lf > 6){ lf -= 0.5; doc.setFontSize(lf); }
     doc.text(label, x, y);
-    doc.setFont("helvetica","bold"); setText(INK);
-    let vf = 12; doc.setFontSize(vf);
-    while (doc.getTextWidth(s[1]) > maxW && vf > 7){ vf -= 0.5; doc.setFontSize(vf); }
+    doc.setFont("helvetica","bold"); setText(INK); doc.setFontSize(vf);
     doc.text(s[1], x, y+6);
   });
   y += 15;
@@ -2135,6 +2127,24 @@ function buildPdf(jsPDF, L){
       doc.text(lines, M, y); y += lines.length*4.4 + 1;
     });
     y+=3;
+  }
+
+  // Aufmaßliste
+  {
+    const maxW = Math.max(...L.widths);
+    const isSplit = p => { const a=Math.min(p.width,p.length), b=Math.max(p.width,p.length); return !(a<=maxW+1e-6 && b<=L.length+1e-6); };
+    const nahtTxt = p => isSplit(p) ? `${p.arb ? "beliebig" : "gleichmäßig"} ${L.splitDir}` : "";
+    ensure(10);
+    doc.setFont("helvetica","bold"); doc.setFontSize(9.5); setText(INK);
+    doc.text("Aufmaßliste", M, y); y+=4;
+    tableBlock(
+      ["Name","Anzahl","Breite (mm)","Höhe (mm)","Naht"],
+      [0.30,0.12,0.16,0.16,0.26],
+      L.pieces.map(p => [ p.name || "Schnitt", fmt(p.qty||1), fmt(p.width), fmt(p.length), nahtTxt(p) ]),
+      [false,true,true,true,false],
+      ["l","r","r","r","l"]
+    );
+    y+=4;
   }
 
   /* ---------- je Rolle: eigene Seite, Grafik links + Liste rechts ---------- */
