@@ -693,7 +693,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <div class="card-head"><span class="step-no">1</span><h2>Rolle wählen</h2></div>
     <div class="field">
       <label class="flbl" for="projName">Projektname</label>
-      <input type="text" id="projName" placeholder="wird für den PDF-Dateinamen verwendet (Verschnittplan_…)">
+      <input type="text" id="projName" placeholder="wird für den PDF-Dateinamen verwendet (VP_Projektname_Folientyp)">
     </div>
     <div class="field">
       <label class="flbl" for="folientyp">Folientyp</label>
@@ -1451,7 +1451,7 @@ function optimize(pieces, rollDef, buffer, allowSplit, minSavePct, axis){
 
   return {
     empty:false, warnings, rolls, widths:ws, widthsUsed, Lmax, buffer,
-    totalUsed, util, consumedArea, lastTail, volSplitCount, perWidth,
+    totalUsed, util, consumedArea, pieceArea, lastTail, volSplitCount, perWidth,
     pieceCount: finalRects.length,
   };
 }
@@ -1845,7 +1845,8 @@ function renderResults(out){
     <div class="stat"><div class="k">Genutzte Rollenbreiten</div><div class="v" style="font-size:16px">${usedWidthsTxt}</div></div>
     <div class="stat"><div class="k">Anzahl Fenster</div><div class="v">${out.pieceCount}</div></div>
     <div class="stat"><div class="k">Verschnitt</div><div class="v">${wastePct.toFixed(1)}<small> %</small></div></div>
-    <div class="stat"><div class="k">Folienfläche gesamt</div><div class="v">${folienQm.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})}<small> m²</small></div></div>
+    <div class="stat"><div class="k">Menge mit Verschnitt</div><div class="v">${folienQm.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})}<small> m²</small></div></div>
+    <div class="stat"><div class="k">Menge für Angebot</div><div class="v">${(out.pieceArea/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})}<small> m²</small></div></div>
     <div class="stat"><div class="k">Kosten Folie</div><div class="v">${kostenTxt}</div></div>
   </div>`;
 
@@ -1976,8 +1977,11 @@ function downloadPDF(){
     }
     if (!lastResult){ return; }
     const doc = buildPdf(window.jspdf.jsPDF, lastResult);
-    const safe = (lastResult.projName||"").trim().replace(/[\\/:*?"<>|]+/g,"").replace(/\s+/g,"_");
-    doc.save(safe ? `Verschnittplan_${safe}.pdf` : "Verschnittplan.pdf");
+    const clean = s => (s||"").trim().replace(/[\\/:*?"<>|]+/g,"").replace(/\s+/g,"_");
+    const parts = ["VP"];
+    const proj = clean(lastResult.projName); if (proj) parts.push(proj);
+    const typ  = clean(lastResult.filmType); if (typ) parts.push(typ);
+    doc.save(parts.join("_") + ".pdf");
   } catch(err){
     console.error(err);
     alert("PDF konnte nicht erstellt werden. Es wird der Druckdialog geöffnet.");
@@ -2065,11 +2069,12 @@ function buildPdf(jsPDF, L){
     ["Genutzte Rollenbreiten", o.widthsUsed.map(w=>fmt(w)).join(" · ") + " mm"],
     ["Anzahl Fenster", String(o.pieceCount)],
     ["Verschnitt", `${(100-o.util*100).toFixed(1)} %`],
-    ["Folienfläche gesamt", `${folienQm.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})} qm`],
+    ["Menge mit Verschnitt", `${folienQm.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})} qm`],
+    ["Menge für Angebot", `${(o.pieceArea/1e6).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})} qm`],
   ];
-  // 4 Kennzahlen in einer Reihe (variable Spaltenbreiten, damit alles passt)
-  const stx = [0, 0.30, 0.50, 0.66].map(f => M + f*cw);
-  const stRight = [stx[1], stx[2], stx[3], M + cw];
+  // 5 Kennzahlen in einer Reihe (variable Spaltenbreiten, damit alles passt)
+  const stx = [0, 0.27, 0.40, 0.53, 0.73].map(f => M + f*cw);
+  const stRight = [stx[1], stx[2], stx[3], stx[4], M + cw];
   ensure(13);
   stats.forEach((s,i)=>{
     const x = stx[i], maxW = stRight[i] - x - 2;
