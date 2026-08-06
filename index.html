@@ -2153,10 +2153,12 @@ function buildPdf(jsPDF, L){
 
     const topY = y, availH = bottom - topY;
     const rulerW = 11, drawW = 80, gap = 8;
+    const ordered = [...r.placed].sort((a,b)=>a.py-b.py||a.px-b.px);
+    ordered.forEach((it,i)=> it._nr = i+1);              // Nr. für Grafik + Liste (gleiche Reihenfolge)
     const drawRight = drawRollLayout(r, r.W, M, topY, rulerW, drawW, availH);
 
     const xT = drawRight + gap, wT = (PW-M) - xT;
-    const rows = [...r.placed].sort((a,b)=>a.py-b.py||a.px-b.px).map((it,i)=>{
+    const rows = ordered.map((it,i)=>{
       const tags=[]; if(it.mandSplit)tags.push("Split"); if(it.volSplit)tags.push("Frei"); if(it.rot)tags.push("gedreht");
       const nm = (it.name||"") + (tags.length?` [${tags.join(", ")}]`:"");
       return [ String(i+1), nm, `${fmt(it.w)}×${fmt(it.l)}`, `${fmt(it.py)} / ${fmt(it.px)}` ];
@@ -2222,16 +2224,24 @@ function buildPdf(jsPDF, L){
       if (seam){ setDraw(ACC); doc.setLineWidth(0.4); doc.setLineDashPattern([1.1,0.8],0); }
       else     { setDraw([58,64,72]); doc.setLineWidth(0.25); doc.setLineDashPattern([],0); }
       doc.rect(px,py,pw,ph,"FD"); doc.setLineDashPattern([],0);
-      // Beschriftung – Schriftgröße an die Schnittgröße anpassen
-      if (pw>9 && ph>3.2){
-        const showDim = ph>8.5;
-        let fs = Math.max(4.5, Math.min(8, ph*(showDim?0.9:1.5), pw*0.7));
-        setText(INK); doc.setFont("helvetica","bold"); doc.setFontSize(fs);
-        const nm = doc.splitTextToSize(it.name||"", pw-2)[0] || "";
-        doc.text(nm, px+pw/2, py+ph/2 + (showDim?-0.4:fs*0.18), { align:"center" });
-        if (showDim){
-          doc.setFont("courier","normal"); doc.setFontSize(Math.max(4.2, fs*0.78)); setText([70,70,70]);
-          doc.text(`${fmt(it.w)}×${fmt(it.l)}`, px+pw/2, py+ph/2 + fs*0.55, { align:"center" });
+      // Beschriftung: Nr. immer (an die Schnittgröße angepasst), Name zusätzlich bei genug Platz
+      const nr = it._nr != null ? String(it._nr) : "";
+      if (nr && pw > 4 && ph > 3){
+        setText(INK); doc.setFont("helvetica","bold");
+        let fs = Math.max(3.5, Math.min(9, ph*0.6, pw*1.2));
+        doc.setFontSize(fs);
+        while (doc.getTextWidth(nr) > pw - 1 && fs > 3){ fs -= 0.3; doc.setFontSize(fs); }
+        if (doc.getTextWidth(nr) <= pw - 0.5){
+          const withName = ph > 10 && pw > 16 && (it.name || "");
+          if (withName){
+            doc.text(nr, px+pw/2, py+ph/2 - 0.4, { align:"center" });
+            const fn = Math.max(4, Math.min(6.5, fs*0.7));
+            doc.setFont("helvetica","normal"); doc.setFontSize(fn); setText([70,70,70]);
+            const nm = doc.splitTextToSize(it.name||"", pw-2)[0] || "";
+            doc.text(nm, px+pw/2, py+ph/2 + fn*0.95, { align:"center" });
+          } else {
+            doc.text(nr, px+pw/2, py+ph/2 + fs*0.35, { align:"center" });
+          }
         }
       }
     });
