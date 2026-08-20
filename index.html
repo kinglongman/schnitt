@@ -1096,66 +1096,78 @@ function mixedColumnPack(rects, W, Lmax, buffer){
   };
   const maxLen = cols => cols.reduce((m,c)=>Math.max(m, c.len), 0);
 
-  const place = (roll, it) => {
-    const oris = [{ pw:it.w, pl:it.l, rot:false }, { pw:it.l, pl:it.w, rot:true }]
-                 .filter(o => o.pw <= W + 1e-6 && o.pl <= Lmax + 1e-6);
-    let best = null;
-    for (const o of oris){
-      // in bestehende Spalte gleicher Breite
-      roll.cols.forEach((c, ci)=>{
-        if (Math.abs(c.cw - o.pw) > 1e-6) return;
-        const nl = c.len + buffer + o.pl;
-        if (nl > Lmax + 1e-6) return;
-        const mh = Math.max(nl, ...roll.cols.filter((_,k)=>k!==ci).map(x=>x.len), 0);
-        const cand = { mh, add:ci, o, extraW:0 };
-        if (!best || cand.mh < best.mh - 1e-6 || (Math.abs(cand.mh-best.mh)<1e-6 && best.add<0)) best = cand;
-      });
-      // neue Spalte
-      if (roll.cols.length < MAX_ACROSS){
-        const test = [...roll.cols, { cw:o.pw, len:o.pl }];
-        if (widthOf(test) <= W + buffer + 1e-6){
-          const mh = Math.max(o.pl, maxLen(roll.cols));
-          const cand = { mh, add:-1, o, extraW:o.pw };
-          // bei Gleichstand: lieber in bestehende Spalte (add>=0) als neue eröffnen
-          if (!best || cand.mh < best.mh - 1e-6) best = cand;
+  // mode: "balance" = geringste Gesamthöhe je Schritt; "compact" = möglichst wenige Spalten (Breite sparen)
+  const run = (mode) => {
+    const place = (roll, it) => {
+      const oris = [{ pw:it.w, pl:it.l, rot:false }, { pw:it.l, pl:it.w, rot:true }]
+                   .filter(o => o.pw <= W + 1e-6 && o.pl <= Lmax + 1e-6);
+      const adds = [], news = [];
+      for (const o of oris){
+        roll.cols.forEach((c, ci)=>{
+          if (Math.abs(c.cw - o.pw) > 1e-6) return;
+          const nl = c.len + buffer + o.pl;
+          if (nl > Lmax + 1e-6) return;
+          const mh = Math.max(nl, ...roll.cols.filter((_,k)=>k!==ci).map(x=>x.len), 0);
+          adds.push({ mh, add:ci, o });
+        });
+        if (roll.cols.length < MAX_ACROSS){
+          const test = [...roll.cols, { cw:o.pw, len:o.pl }];
+          if (widthOf(test) <= W + buffer + 1e-6){
+            const mh = Math.max(o.pl, maxLen(roll.cols));
+            news.push({ mh, add:-1, o });
+          }
         }
       }
+      let best = null;
+      if (mode === "compact"){
+        // Breite sparen: bestehende Spalte bevorzugen, nur wenn nötig neue eröffnen
+        const pool = adds.length ? adds : news;
+        for (const c of pool) if (!best || c.mh < best.mh - 1e-6) best = c;
+      } else {
+        // ausbalancieren: geringste Gesamthöhe, bei Gleichstand bestehende Spalte
+        for (const c of [...adds, ...news]){
+          if (!best || c.mh < best.mh - 1e-6 || (Math.abs(c.mh-best.mh)<1e-6 && best.add<0 && c.add>=0)) best = c;
+        }
+      }
+      if (!best) return false;
+      if (best.add >= 0){
+        const c = roll.cols[best.add];
+        c.items.push({ rect: it, rot: best.o.rot, pw: best.o.pw, pl: best.o.pl, y: c.len + buffer });
+        c.len = c.len + buffer + best.o.pl;
+      } else {
+        roll.cols.push({ cw: best.o.pw, len: best.o.pl, items: [{ rect: it, rot: best.o.rot, pw: best.o.pw, pl: best.o.pl, y: 0 }] });
+      }
+      return true;
+    };
+
+    const rolls = [];
+    let cur = { cols: [] };
+    for (const it of items){
+      if (!place(cur, it)){
+        if (cur.cols.length) rolls.push(cur);
+        cur = { cols: [] };
+        if (!place(cur, it)) return null;
+      }
     }
-    if (!best) return false;
-    if (best.add >= 0){
-      const c = roll.cols[best.add];
-      c.items.push({ rect: it, rot: best.o.rot, pw: best.o.pw, pl: best.o.pl, y: c.len + buffer });
-      c.len = c.len + buffer + best.o.pl;
-    } else {
-      roll.cols.push({ cw: best.o.pw, len: best.o.pl, items: [{ rect: it, rot: best.o.rot, pw: best.o.pw, pl: best.o.pl, y: 0 }] });
-    }
-    return true;
+    if (cur.cols.length) rolls.push(cur);
+
+    const outRolls = rolls.map(roll=>{
+      const placed = [];
+      let x = 0;
+      roll.cols.forEach((c, ci)=>{
+        if (ci === 3) x += GAP_34;
+        for (const p of c.items) placed.push({ ...p.rect, px:x, py:p.y, pw:p.pw, ph:p.pl, rot:p.rot });
+        x += c.cw + buffer;
+      });
+      return { placed, usedLength: placed.reduce((m,q)=>Math.max(m, q.py+q.ph), 0) };
+    });
+    return { rolls: outRolls, totalLength: outRolls.reduce((s,r)=>s+r.usedLength,0), nRolls: outRolls.length };
   };
 
-  const rolls = [];
-  let cur = { cols: [] };
-  for (const it of items){
-    if (!place(cur, it)){
-      if (cur.cols.length) rolls.push(cur);
-      cur = { cols: [] };
-      if (!place(cur, it)) return null;          // passt gar nicht -> aufgeben
-    }
-  }
-  if (cur.cols.length) rolls.push(cur);
-
-  const outRolls = rolls.map(roll=>{
-    const placed = [];
-    let x = 0;
-    roll.cols.forEach((c, ci)=>{
-      if (ci === 3) x += GAP_34;                  // Pflichtspalt vor der 4. Spalte
-      for (const p of c.items){
-        placed.push({ ...p.rect, px:x, py:p.y, pw:p.pw, ph:p.pl, rot:p.rot });
-      }
-      x += c.cw + buffer;
-    });
-    return { placed, usedLength: placed.reduce((m,q)=>Math.max(m, q.py+q.ph), 0) };
-  });
-  return { rolls: outRolls, totalLength: outRolls.reduce((s,r)=>s+r.usedLength,0), nRolls: outRolls.length };
+  const cands = [run("balance"), run("compact")].filter(Boolean);
+  if (!cands.length) return null;
+  cands.sort((a,b)=> (a.nRolls - b.nRolls) || (a.totalLength - b.totalLength));
+  return cands[0];
 }
 
 // Reihen-Packung: höchstens MAX_ACROSS Teile je Reihe -> erfüllt die Maschinen-Grenze immer.
