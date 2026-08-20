@@ -1055,7 +1055,9 @@ function columnPack(rects, W, Lmax, buffer){
       }
       if (!ok) continue;
       const len = Math.max(0, ...cols.map(c => c.n>0 ? c.n*(c.len+buffer)-buffer : 0));
-      if (!best || len < best.len - 1e-9) best = { cols, len };
+      const w0 = rects[0].w;
+      const rot = cols.reduce((s,c)=> s + (Math.abs(c.cross - w0) > 1e-6 ? c.n : 0), 0);  // gedrehte Teile
+      if (!best || len < best.len - 1e-9 || (Math.abs(len-best.len) < 1e-9 && rot < best.rot)) best = { cols, len, rot };
     }
     return best;
   };
@@ -1225,11 +1227,12 @@ function bestPack(rects, W, buffer, Lmax){
     const lens = r.rolls.map(x=>x.usedLength).sort((a,b)=>b-a);
     return lens.length ? Lmax*(lens.length-1) + lens[lens.length-1] : 0;
   };
+  const rotCount = r => r.rolls.reduce((s,b)=> s + b.placed.filter(p=>p.rot).length, 0);
   const add = (r, maxAc) => {
     if (!r || !r.rolls.length) return;
     if (!r.rolls.every(b => maxAcross(b.placed) <= maxAc)) return;
-    const sc = billed(r);
-    if (!best || sc < best.sc - 1e-6) best = { ...r, sc };
+    const sc = billed(r), rc = rotCount(r);
+    if (!best || sc < best.sc - 1e-6 || (Math.abs(sc-best.sc) <= 1e-6 && rc < best.rot)) best = { ...r, sc, rot: rc };
   };
   // Guillotine darf höchstens 3 nebeneinander (4er-Layouts brauchen den Pflichtspalt -> nur Spalten/Reihen).
   for (const cfg of CONFIGS) add(guillotinePack(rects, W, Lmax, buffer, cfg), 3);
