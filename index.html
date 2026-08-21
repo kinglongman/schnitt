@@ -1367,6 +1367,41 @@ function packMulti(rects, widths, Lmax, buffer){
     candidates.push(curRolls);
   })();
 
+  // --- Strategie D: alle Typ->Breite-Zuordnungen durchprobieren (bei wenigen Typen) ---
+  (function(){
+    if (ws.length < 2) return;
+    const groups = new Map();
+    for (const r of rects){ const k = r.typeIdx; if (!groups.has(k)) groups.set(k,[]); groups.get(k).push(r); }
+    const typeKeys = [...groups.keys()];
+    const feas = typeKeys.map(k => ws.filter(W => groups.get(k).every(r => fitsW(r,W))));
+    if (feas.some(f => f.length === 0)) return;        // ein Typ passt nirgends
+    const combos = feas.reduce((n,f)=> n * f.length, 1);
+    if (combos < 2) return;                            // nichts zu variieren
+    if (Math.pow(2, typeKeys.length) * ws.length > 2048) return;  // exakte Suche bis ~10 Maße (2 Breiten)
+    const packCache = new Map();
+    const packSub = (rs, W) => {
+      const key = [...new Set(rs.map(r=>r.typeIdx))].sort((a,b)=>a-b).join(",") + "@" + W;
+      if (!packCache.has(key)) packCache.set(key, packOn(rs, W).rolls);
+      return packCache.get(key);
+    };
+    const idx = new Array(typeKeys.length).fill(0);
+    for (let c = 0; c < combos; c++){
+      const byW = new Map();
+      for (let t = 0; t < typeKeys.length; t++){
+        const W = feas[t][idx[t]];
+        if (!byW.has(W)) byW.set(W, []);
+        byW.get(W).push(...groups.get(typeKeys[t]));
+      }
+      let rolls = [];
+      for (const [W, rs] of byW) rolls = rolls.concat(packSub(rs, W));
+      candidates.push(rolls);
+      for (let t = 0; t < typeKeys.length; t++){       // Mixed-Radix hochzählen
+        if (++idx[t] < feas[t].length) break;
+        idx[t] = 0;
+      }
+    }
+  })();
+
   // Bestes Ergebnis: kleinste Materialfläche; bei (nahezu) gleicher Fläche die mit den wenigsten Drehungen.
   const valid = candidates
     .filter(c => c && c.length && c.reduce((s,r)=>s + r.placed.length, 0) >= rects.length)
